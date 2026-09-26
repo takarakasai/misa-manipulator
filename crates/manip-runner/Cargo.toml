@@ -1,0 +1,34 @@
+# manip-runner — the application. Reads a profile, assembles the Plant, control law and leader, and runs them.
+[package]
+name = "manip-runner"
+description = "Model-based manipulator control application (teleoperation, gravity compensation, OSC)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "manip"
+path = "src/main.rs"
+
+[dependencies]
+manip-model = { workspace = true }
+manip-control = { workspace = true }
+manip-leader = { workspace = true }
+manip-plant-can = { workspace = true }
+misa-wbc = { workspace = true }
+misa-core = { workspace = true }
+nalgebra = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+clap = { workspace = true }
+ctrlc = { workspace = true }
+# MuJoCo (`--features sim`). Not a workspace member (see the root Cargo.toml).
+manip-plant-mujoco = { path = "../manip-plant-mujoco", optional = true }
+
+[features]
+default = ["fashionstar"]
+sim = ["dep:manip-plant-mujoco"]
+fashionstar = ["manip-leader/fashionstar"]

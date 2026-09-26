@@ -1,0 +1,65 @@
+# Star Arm 102 (LD) / Seeed reBot Arm 102 — 7x FashionStar UART bus servos.
+#
+# Output is in the neutral space (same convention as LeRobot's action; joint names are LeRobot's).
+# **Not yet verified on real hardware** (2026-09-27). Where the values come from:
+# - Servo IDs: Seeed lerobot-teleoperator-rebot-arm-102 (0..6 = pan..gripper)
+# - sign / scale: joint_directions of upstream LeRobot `rebot_102_leader`
+#   (pan −1, lift −1, elbow +1, wrist_flex +1, yaw +1, roll −1, gripper −6).
+#   Some versions of Seeed's standalone plugin have no signs; **which is correct is unconfirmed**.
+#   Verify by moving one axis at a time with `manip run ... --plant sim --source leader`.
+# - range: LeRobot joint range of the follower (B601-DM) [deg].
+# - offset_deg: servo angle at the zero pose (folded, gripper closed). 0 if Seeed's
+#   calibration (set_origin_point) has been done. Otherwise copy the output of
+#   `manip leader --leader <this> --zero` here (it is not written to servo NVM).
+
+[leader]
+name = "stararm102"
+port = "/dev/ttyUSB0"
+baud = 1000000
+rate_hz = 200
+timeout_ms = 10
+release_on_start = true
+reset_multi_turn = true
+
+[[joint]]
+name = "shoulder_pan"
+servo = 0
+sign = -1.0
+range_deg = [-150.0, 150.0]
+
+[[joint]]
+name = "shoulder_lift"
+servo = 1
+sign = -1.0
+range_deg = [-200.0, 1.0]
+
+[[joint]]
+name = "elbow_flex"
+servo = 2
+sign = 1.0
+range_deg = [-200.0, 1.0]
+
+[[joint]]
+name = "wrist_flex"
+servo = 3
+sign = 1.0
+range_deg = [-80.0, 90.0]
+
+[[joint]]
+name = "wrist_yaw"
+servo = 4
+sign = 1.0
+range_deg = [-90.0, 90.0]
+
+[[joint]]
+name = "wrist_roll"
+servo = 5
+sign = -1.0
+range_deg = [-90.0, 90.0]
+
+[[joint]]
+name = "gripper"
+servo = 6
+sign = -1.0
+scale = 6.0
+range_deg = [-270.0, 0.0]

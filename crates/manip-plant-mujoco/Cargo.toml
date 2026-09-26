@@ -1,0 +1,24 @@
+# manip-plant-mujoco — exposes articara's MuJoCo as an arm Plant.
+#
+# **Not a workspace member** (otherwise `cargo test` fails on machines without
+# MuJoCo). Pulled in as a path dependency only from manip-runner's `sim` feature.
+# Workspace inheritance (`workspace = true`) is unavailable, so versions are
+# written out directly.
+#
+# Building requires the MuJoCo 3.8 shared library:
+#   export MUJOCO_DYNAMIC_LINK_DIR=$HOME/.mujoco/mujoco-3.8.0/lib
+[package]
+name = "manip-plant-mujoco"
+description = "Uses articara's MuJoCo simulator as a misa-core Plant (fixed-base arm)."
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Takara Kasai <takara.kasai@gmail.com>"]
+
+[dependencies]
+misa-core = { git = "https://github.com/takarakasai/misa-runner.git", package = "misa-core" }
+articara = { git = "https://github.com/takarakasai/articara.git", default-features = false, features = ["mujoco"] }
+log = "0.4"
+
+[dev-dependencies]
+manip-model = { path = "../manip-model" }

@@ -1,0 +1,23 @@
+# manip-plant-can — exposes a CAN-connected arm (DAMIAO / RobStride) as a Plant.
+#
+# One free-running thread per bus cycles through the motors; the control loop
+# just writes targets into a shared slot and reads the latest observation
+# (same design as misa-runner's leg buses). Motors on one bus can only be
+# serviced serially, so tying the control period to bus completion caps it at
+# "motor count x round-trip time", which is unknown until real hardware is
+# connected. This lets us measure first and choose the period afterwards.
+[package]
+name = "manip-plant-can"
+description = "Exposes an arm on CAN (DAMIAO / RobStride MIT control) as a misa-core Plant."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+misa-core = { workspace = true }
+misa-actuator = { workspace = true }
+damiao-driver = { workspace = true }
+robstride-driver = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }

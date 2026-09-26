@@ -1,0 +1,73 @@
+# misa-manipulator — model-based manipulator control application.
+#
+# A robot is defined as "model (.misa / URDF) + profile (TOML)".
+# Control laws deal only in the model's joint angles and torques; motor sign,
+# zero offset, gear ratio and bus assignment are confined to the HAL (Plant).
+# That is why both followers and leaders can be swapped just by switching
+# the profile.
+#
+# All dependencies are git dependencies on public GitHub repositories. For
+# parallel development against sibling checkouts, use `./scripts/dev-siblings.sh`
+# (same convention as misa-runner).
+[workspace]
+resolver = "2"
+members = [
+    "crates/manip-model",
+    "crates/manip-control",
+    "crates/manip-leader",
+    "crates/manip-plant-can",
+    "crates/manip-runner",
+    "crates/manip-tools",
+]
+# **Crates that require MuJoCo are not workspace members.** Otherwise
+# `cargo test --workspace` fails on machines without MuJoCo installed. They are
+# pulled in as path dependencies only when manip-runner's `sim` feature is
+# enabled (same as misa-runner).
+exclude = ["crates/manip-plant-mujoco"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Takara Kasai <takara.kasai@gmail.com>"]
+
+[workspace.dependencies]
+manip-model = { path = "crates/manip-model" }
+manip-control = { path = "crates/manip-control" }
+manip-leader = { path = "crates/manip-leader" }
+manip-plant-can = { path = "crates/manip-plant-can" }
+
+# ── Our own crates (git dependencies) ──
+#
+# **URLs must match the spelling used in the other repositories
+# (quadruped-gait / misa-runner / articara) character for character.** Cargo
+# identifies git sources by the URL string, so a `git@` form or a missing/extra
+# trailing `.git` makes it a different source; misarta's types then get
+# duplicated and the build fails.
+misarta = { git = "https://github.com/takarakasai/misarta.git" }
+misarta-formats = { git = "https://github.com/takarakasai/misarta.git" }
+misa-wbc = { git = "https://github.com/takarakasai/misa-wbc.git" }
+misa-core = { git = "https://github.com/takarakasai/misa-runner.git", package = "misa-core" }
+misa-actuator = { git = "https://github.com/takarakasai/misa-actuator.git", package = "misa-actuator" }
+misa-can = { git = "https://github.com/takarakasai/misa-actuator.git", package = "misa-can" }
+damiao-driver = { git = "https://github.com/takarakasai/misa-actuator.git", package = "damiao-driver" }
+robstride-driver = { git = "https://github.com/takarakasai/misa-actuator.git", package = "robstride-driver" }
+fashionstar-driver = { git = "https://github.com/takarakasai/misa-actuator.git", package = "fashionstar-driver" }
+
+# ── External crates ──
+nalgebra = "0.34.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+zenoh = "1.9"
+serde_json = "1"
+approx = "0.5"
+
+[profile.release]
+# To reduce control-loop jitter. debug=true only adds symbols and does not affect speed.
+debug = true
+lto = "thin"

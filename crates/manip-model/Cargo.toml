@@ -1,0 +1,23 @@
+# manip-model — shapes misarta's model into the form arm control laws need.
+#
+# Control laws only touch M / h / g / J / J̇v and the TCP pose over the
+# independent DOFs (coordinates excluding mimic-dependent joints). By
+# normalizing here, a URDF whose fingers are two prismatic joints + mimic and
+# a 7-joint arm both look like the same n-dimensional arm to the controller.
+[package]
+name = "manip-model"
+description = "Wraps misarta's rigid-body model for arm control laws (independent DOFs, TCP, joint limits)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+misarta = { workspace = true }
+misarta-formats = { workspace = true }
+nalgebra = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

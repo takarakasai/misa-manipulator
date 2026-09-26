@@ -1,0 +1,241 @@
+# Seeed reBot Arm B601-DM (3x DAMIAO DM4340P + 4x DM4310, CAN 1 Mbps).
+#
+# **Not yet verified on real hardware** (2026-09-27). Where the values come from:
+# - Motor ID / Master ID: config/rebotarm_dm.yaml in Seeed reBotArm_control_py
+#   (IDs 1–7, Master = ID + 0x10)
+# - Sign / zero: Seeed's SDK passes motor angles to Pinocchio as URDF joint angles
+#   unchanged (zero is set with set_zero in the folded pose). Hence sign = 1, zero = 0.
+# - Reflected rotor inertia (armature) and velocity limits are **rough estimates**.
+#   Identify them with misa-sysid.
+# - The gripper ratio (m/rad) has not been measured (see models/README.md).
+
+[robot]
+name = "rebot_b601_dm"
+model = "../models/rebot_b601_dm/rebot_b601_dm.misa"
+tcp = { link = "end_link" }
+
+[control]
+rate_hz = 500
+feedforward = "gravity"
+startup_ramp_s = 1.0
+shaper_time_constant_s = 0.05
+leader_timeout_s = 0.1
+max_observation_age_s = 0.05
+park_speed_scale = 0.3
+park_tolerance = 0.05
+
+# ── Joints (all independent DOFs of the model) ──────────────────────────
+# kp/kd go to the motor's MIT mode (in model units). Seeed's default holding
+# gains are 120/8 for shoulder/elbow and 18/2 for the wrist. Teleop tracking
+# starts softer than that.
+[[joint]]
+name = "joint1"
+kp = 60.0
+kd = 3.0
+hold_kp = 120.0
+hold_kd = 8.0
+gravity_kd = 0.5
+v_max = 3.0
+a_max = 15.0
+armature = 0.02
+max_torque_rate = 400.0
+sim_damping = 0.5
+
+[[joint]]
+name = "joint2"
+kp = 60.0
+kd = 3.0
+hold_kp = 120.0
+hold_kd = 8.0
+gravity_kd = 0.5
+v_max = 3.0
+a_max = 15.0
+armature = 0.02
+max_torque_rate = 400.0
+sim_damping = 0.5
+
+[[joint]]
+name = "joint3"
+kp = 60.0
+kd = 3.0
+hold_kp = 120.0
+hold_kd = 8.0
+gravity_kd = 0.5
+v_max = 3.0
+a_max = 15.0
+armature = 0.02
+max_torque_rate = 400.0
+sim_damping = 0.5
+
+[[joint]]
+name = "joint4"
+kp = 15.0
+kd = 0.8
+hold_kp = 18.0
+hold_kd = 2.0
+gravity_kd = 0.1
+v_max = 4.0
+a_max = 25.0
+armature = 0.003
+max_torque_rate = 150.0
+sim_damping = 0.1
+
+[[joint]]
+name = "joint5"
+kp = 15.0
+kd = 0.8
+hold_kp = 18.0
+hold_kd = 2.0
+gravity_kd = 0.1
+v_max = 4.0
+a_max = 25.0
+armature = 0.003
+max_torque_rate = 150.0
+sim_damping = 0.1
+
+[[joint]]
+name = "joint6"
+kp = 15.0
+kd = 0.8
+hold_kp = 18.0
+hold_kd = 2.0
+gravity_kd = 0.1
+v_max = 4.0
+a_max = 25.0
+armature = 0.003
+max_torque_rate = 150.0
+sim_damping = 0.1
+
+# Gripper (in the model: displacement [m] of one finger; the other is a mimic).
+# Gains and inertia are in model units (N/m, kg), hence the large magnitudes. On the
+# motor side they are scaled by ratio² (ratio = 0.00605 m/rad → 3.66e-5), giving kp ≈ 7 N·m/rad.
+[[joint]]
+name = "finger_left"
+kp = 2.0e5
+kd = 5.0e3
+gravity_kd = 1.0e3
+v_max = 0.05
+a_max = 0.5
+armature = 80.0
+effort = 150.0
+sim_damping = 500.0
+
+# ── Poses ───────────────────────────────────────────────────────────
+# rest = folded pose (motor zero). Destination of Park.
+[pose.rest]
+
+[pose.ready]
+joint2 = -1.2
+joint3 = -1.2
+joint4 = 0.3
+
+# ── OSC (operational space control) ─────────────────────────────────
+[osc]
+kp_lin = 400.0
+kd_lin = 40.0
+kp_ang = 200.0
+kd_ang = 28.0
+posture_kp = 25.0
+posture_kd = 10.0
+a_max = 50.0
+lin_v_max = 0.3
+ang_v_max = 1.5
+
+# ── Sim (MuJoCo) ────────────────────────────────────────────────────
+[sim]
+timestep_s = 0.0005
+initial_pose = "rest"
+ground = false
+joint_limits = true
+
+# ── Teleop: leader neutral space → this arm ─────────────────────────
+# The neutral space follows the same convention as LeRobot's action (output of leaders/*.toml).
+# On the B601-DM motor angle = URDF angle, so shoulder through wrist map 1:1.
+# Gripper: neutral space is 0 when closed and negative when open (LeRobot's -270° is fully
+# open) → finger displacement is positive.
+[[teleop]]
+joint = "joint1"
+from = "shoulder_pan"
+
+[[teleop]]
+joint = "joint2"
+from = "shoulder_lift"
+
+[[teleop]]
+joint = "joint3"
+from = "elbow_flex"
+
+[[teleop]]
+joint = "joint4"
+from = "wrist_flex"
+
+[[teleop]]
+joint = "joint5"
+from = "wrist_yaw"
+
+[[teleop]]
+joint = "joint6"
+from = "wrist_roll"
+
+[[teleop]]
+joint = "finger_left"
+from = "gripper"
+scale = -0.00605
+
+# ── Synthetic targets (--source sine) ───────────────────────────────
+[[sine]]
+name = "joint1"
+amp = 0.5
+freq_hz = 0.2
+
+[[sine]]
+name = "joint2"
+center = -1.2
+amp = 0.3
+freq_hz = 0.25
+
+[[sine]]
+name = "joint3"
+center = -1.2
+amp = 0.3
+freq_hz = 0.3
+
+[[sine]]
+name = "joint4"
+center = 0.3
+amp = 0.4
+freq_hz = 0.3
+
+[[sine]]
+name = "joint5"
+amp = 0.5
+freq_hz = 0.25
+
+[[sine]]
+name = "joint6"
+amp = 1.0
+freq_hz = 0.3
+
+[[sine]]
+name = "finger_left"
+center = 0.014
+amp = 0.012
+freq_hz = 0.5
+
+# ── Hardware ────────────────────────────────────────────────────────
+[hardware]
+stale_after_s = 0.1
+
+[[hardware.bus]]
+interface = "can0"
+vendor = "damiao"
+motor = [
+  { joint = "joint1", id = 1, model = "dm4340p" },
+  { joint = "joint2", id = 2, model = "dm4340p" },
+  { joint = "joint3", id = 3, model = "dm4340p" },
+  { joint = "joint4", id = 4, model = "dm4310" },
+  { joint = "joint5", id = 5, model = "dm4310" },
+  { joint = "joint6", id = 6, model = "dm4310" },
+  # Opening makes the motor angle negative (LeRobot gripper range −270°..0) and the finger displacement positive.
+  { joint = "finger_left", id = 7, model = "dm4310", sign = -1.0, ratio = 0.00605 },
+]

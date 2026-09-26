@@ -1,0 +1,23 @@
+# manip-tools — tools for importing and inspecting models. Not part of the control loop.
+[package]
+name = "manip-tools"
+description = "Imports URDF into .misa (with mesh decimation) and inspects arm models."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "manip-import"
+path = "src/bin/manip_import.rs"
+
+[[bin]]
+name = "manip-inspect"
+path = "src/bin/manip_inspect.rs"
+
+[dependencies]
+manip-model = { workspace = true }
+misarta = { workspace = true }
+misarta-formats = { workspace = true }
+nalgebra = { workspace = true }
+clap = { workspace = true }

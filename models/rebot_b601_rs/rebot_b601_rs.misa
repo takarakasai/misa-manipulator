@@ -1,0 +1,710 @@
+schema = "misarta/1"
+
+[robot]
+name = "rebot_b601_rs"
+root = "base_link"
+
+[[material]]
+name = "rs_base_black"
+color = [
+    0.054999999701976776,
+    0.06499999761581421,
+    0.05999999865889549,
+    1.0,
+]
+
+[[material]]
+name = "rs_motor_black"
+color = [
+    0.04500000178813934,
+    0.052000001072883606,
+    0.04899999871850014,
+    1.0,
+]
+
+[[material]]
+name = "rs_pla_black"
+color = [
+    0.09000000357627869,
+    0.10599999874830246,
+    0.10199999809265137,
+    1.0,
+]
+
+[[material]]
+name = "rs_wordmark_black"
+color = [
+    0.009999999776482582,
+    0.012000000104308128,
+    0.010999999940395355,
+    1.0,
+]
+
+[[material]]
+name = "rs_anodized_silver"
+color = [
+    0.7200000286102295,
+    0.7599999904632568,
+    0.7300000190734863,
+    1.0,
+]
+
+[[material]]
+name = "rs_seeed_green"
+color = [
+    0.7250000238418579,
+    0.8349999785423279,
+    0.11800000071525574,
+    1.0,
+]
+
+[[link]]
+name = "base_link"
+
+[link.inertial]
+mass = 1.1774
+ixx = 0.0013304
+iyy = 0.00213119
+izz = 0.00275877
+ixy = 0.00000001
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.00000287641888266442,
+    -0.000122302488725115,
+    0.0243376121934547,
+]
+
+[[link.visual]]
+material = "rs_base_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/base_link.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/base_link.stl"
+
+[[link]]
+name = "link1"
+
+[link.inertial]
+mass = 0.4655
+ixx = 0.00025207
+iyy = 0.00015464
+izz = 0.00023416
+ixy = 0.0
+ixz = -0.00002832
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.00817652280320541,
+    0.00122584211922395,
+    0.0331419658967293,
+]
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/link1.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/link1.stl"
+
+[[link]]
+name = "link2"
+
+[link.inertial]
+mass = 1.552
+ixx = 0.00073374
+iyy = 0.01255987
+izz = 0.01281387
+ixy = -0.00000043
+ixz = 0.00000851
+iyz = 0.00000128
+
+[link.inertial.origin]
+xyz = [
+    -0.117864812717456,
+    -0.00342226413942967,
+    -0.0271551938501484,
+]
+
+[[link.visual]]
+material = "rs_motor_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/motor_2_3.stl"
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc2.stl"
+
+[[link.visual]]
+material = "rs_pla_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla2_black.stl"
+
+[[link.visual]]
+material = "rs_seeed_green"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla2_green.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/link2.stl"
+
+[[link]]
+name = "link3"
+
+[link.inertial]
+mass = 1.252
+ixx = 0.00046807
+iyy = 0.00632695
+izz = 0.00648221
+ixy = -0.00003456
+ixz = -0.0000426
+iyz = 0.00000006
+
+[link.inertial.origin]
+xyz = [
+    0.103427154487799,
+    -0.0664137912104635,
+    -0.0271068687716704,
+]
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc3.stl"
+
+[[link.visual]]
+material = "rs_motor_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/motor_4.stl"
+
+[[link.visual]]
+material = "rs_pla_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla3_black_without_seeed_badge.stl"
+
+[[link.visual]]
+material = "rs_seeed_green"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla3_seeed_badge_with_counters.stl"
+
+[[link.visual]]
+material = "rs_wordmark_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla3_seeed_wordmark_backing.stl"
+
+[[link.visual]]
+material = "rs_seeed_green"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla3_green.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/link3.stl"
+
+[[link]]
+name = "link4"
+
+[link.inertial]
+mass = 0.46
+ixx = 0.00045986
+iyy = 0.00075258
+izz = 0.00066742
+ixy = 0.00024219
+ixz = -0.0
+iyz = -0.0
+
+[link.inertial.origin]
+xyz = [
+    0.0475544540775559,
+    -0.0441113470158517,
+    -0.0314111924918381,
+]
+
+[[link.visual]]
+material = "rs_motor_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/motor_5.stl"
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc4.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/link4.stl"
+
+[[link]]
+name = "link5"
+
+[link.inertial]
+mass = 0.20120457182895
+ixx = 0.0000734238025911107
+iyy = 0.000055153884237714
+izz = 0.0000529920095811017
+ixy = 0.0000000135700947009798
+ixz = -0.000000858146433770359
+iyz = -0.0000000132742144977931
+
+[link.inertial.origin]
+xyz = [
+    0.0114400622356175,
+    0.0000047907739316217,
+    0.0380487481818926,
+]
+
+[[link.visual]]
+material = "rs_motor_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/motor_6.stl"
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc5.stl"
+
+[[link.visual]]
+material = "rs_seeed_green"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla5_green.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/link5.stl"
+
+[[link]]
+name = "link6"
+
+[link.inertial]
+mass = 0.1
+ixx = 0.00000442273835852359
+iyy = 0.00000437185522080034
+izz = 0.00000854299378942051
+ixy = 0.00000000000316758463739482
+ixz = 0.000000000151852818442002
+iyz = -0.00000000000221864017603015
+
+[link.inertial.origin]
+xyz = [
+    0.0000180196022567525,
+    0.0000000248334592051007,
+    0.00434805764057547,
+]
+
+[[link.visual]]
+material = "rs_motor_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/link6.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/link6.stl"
+
+[[link]]
+name = "gripper_end"
+
+[link.inertial]
+mass = 0.65
+ixx = 0.00037354
+iyy = 0.0001583
+izz = 0.00045353
+ixy = -0.00000011
+ixz = 0.0000005
+iyz = 0.00000348
+
+[link.inertial.origin]
+xyz = [
+    -0.112751692515958,
+    0.000128443070436966,
+    -0.00000572602449749882,
+]
+
+[[link.visual]]
+material = "rs_seeed_green"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla7_green.stl"
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc7.stl"
+
+[[link.visual]]
+material = "rs_motor_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/motor_7.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/gripper_end.stl"
+
+[[link]]
+name = "gripper_left"
+
+[link.inertial]
+mass = 0.0752
+ixx = 0.0000109877964176176
+iyy = 0.00000950146036720166
+izz = 0.00000930779991911125
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.00218008703135955,
+    0.0187090355934181,
+    0.00932188568692145,
+]
+
+[[link.visual]]
+material = "rs_pla_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla_left.stl"
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc_left.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/gripper_left.stl"
+
+[[link]]
+name = "gripper_right"
+
+[link.inertial]
+mass = 0.0752
+ixx = 0.0000109877964176176
+iyy = 0.00000950146036720166
+izz = 0.00000930779991911125
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.00218008703135955,
+    -0.018709035593418,
+    0.00932188568692151,
+]
+
+[[link.visual]]
+material = "rs_pla_black"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/pla_right.stl"
+
+[[link.visual]]
+material = "rs_anodized_silver"
+
+[link.visual.geom.mesh]
+file = "meshes/visual/cnc_right.stl"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "meshes/collision/gripper_right.stl"
+
+[[joint]]
+name = "joint1"
+type = "revolute"
+parent = "base_link"
+child = "link1"
+axis = [
+    0.0,
+    0.0,
+    -1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.00034283,
+    -0.00098683,
+    0.075,
+]
+
+[joint.limit]
+lower = -2.8
+upper = 2.8
+effort = 36.0
+velocity = 50.0
+
+[[joint]]
+name = "joint2"
+type = "revolute"
+parent = "link1"
+child = "link2"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    0.020343,
+    0.027237,
+    0.07,
+]
+rpy = [
+    -1.5708,
+    0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 3.14
+effort = 36.0
+velocity = 50.0
+
+[[joint]]
+name = "joint3"
+type = "revolute"
+parent = "link2"
+child = "link3"
+axis = [
+    0.0,
+    0.0,
+    -1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.236,
+    0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 3.14
+effort = 36.0
+velocity = 50.0
+
+[[joint]]
+name = "joint4"
+type = "revolute"
+parent = "link3"
+child = "link4"
+axis = [
+    0.0,
+    0.0,
+    -1.0,
+]
+
+[joint.origin]
+xyz = [
+    0.228,
+    -0.072746,
+    0.0045,
+]
+
+[joint.limit]
+lower = -1.57
+upper = 1.57
+effort = 14.0
+velocity = 40.0
+
+[[joint]]
+name = "joint5"
+type = "revolute"
+parent = "link4"
+child = "link5"
+axis = [
+    0.0,
+    0.0,
+    -1.0,
+]
+
+[joint.origin]
+xyz = [
+    0.087,
+    -0.048,
+    -0.03075,
+]
+rpy = [
+    -1.5708,
+    0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.57
+upper = 1.57
+effort = 14.0
+velocity = 40.0
+
+[[joint]]
+name = "joint6"
+type = "revolute"
+parent = "link5"
+child = "link6"
+axis = [
+    0.0,
+    0.0,
+    -1.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0365,
+    0.0,
+    0.048,
+]
+rpy = [
+    0.0,
+    1.5708,
+    0.0,
+]
+
+[joint.limit]
+lower = -3.14
+upper = 3.14
+effort = 14.0
+velocity = 40.0
+
+[[joint]]
+name = "j_gripper_end"
+type = "fixed"
+parent = "link6"
+child = "gripper_end"
+axis = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.0,
+    0.16621,
+]
+rpy = [
+    3.1416,
+    -1.5708,
+    0.0,
+]
+
+[[joint]]
+name = "gripper_joint1"
+type = "prismatic"
+parent = "gripper_end"
+child = "gripper_left"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.041939,
+    -0.000073385,
+    0.0,
+]
+rpy = [
+    1.5708,
+    -1.5708,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 0.05
+effort = 500.0
+velocity = 10.0
+
+[[joint]]
+name = "gripper_joint2"
+type = "prismatic"
+parent = "gripper_end"
+child = "gripper_right"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.041939,
+    0.000073385,
+    0.0,
+]
+rpy = [
+    -1.5708,
+    -1.5708,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 0.05
+effort = 500.0
+velocity = 10.0
+
+[[mimic]]
+joint = "gripper_joint2"
+source = "gripper_joint1"
+multiplier = 1.0
+offset = 0.0
+
+[home]
+base_position = [
+    0.0,
+    0.0,
+    0.0,
+]
+base_orientation = [
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+]
+
+[home.joint_positions]

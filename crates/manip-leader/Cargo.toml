@@ -1,0 +1,24 @@
+# manip-leader — target sources (leader arms, synthetic signals).
+#
+# The leader is read continuously on a thread separate from the control loop,
+# which only looks at the latest value and its age. This keeps serial round
+# trips (USB-serial latency is on the order of ms) from bounding the control
+# period (same as misa-runner's "buses free-run").
+[package]
+name = "manip-leader"
+description = "Leader arms (Star Arm 102 etc.) and synthetic target sources. Read on a separate thread; hands over the latest value."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+fashionstar-driver = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+
+[features]
+default = ["fashionstar"]
+fashionstar = ["dep:fashionstar-driver", "dep:toml"]

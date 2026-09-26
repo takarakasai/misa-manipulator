@@ -1,0 +1,26 @@
+# manip-control — arm control laws. No I/O.
+#
+# Input is manip-model's ArmState plus a target; output is a per-axis MIT
+# command (q, v, kp, kd, τff). MIT was chosen as the output because both DAMIAO
+# and RobStride support it natively, and the split of leaving position stiffness
+# to the motor-side PD (kHz rate) while we add only model-derived feedforward is
+# the most robust to latency. Torque control (OSC) fits the same form as the
+# special case kp = 0.
+[package]
+name = "manip-control"
+description = "Model-based arm control laws (gravity compensation, joint impedance, OSC / hierarchical QP). No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+manip-model = { workspace = true }
+misa-wbc = { workspace = true }
+nalgebra = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+misarta-formats = { workspace = true }
