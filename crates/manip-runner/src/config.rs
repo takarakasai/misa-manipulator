@@ -33,6 +33,9 @@ pub struct RobotProfile {
     /// Mapping from leader neutral space to this robot's joints.
     #[serde(default)]
     pub teleop: Vec<TeleopMap>,
+    /// Workspace box and self-collision (`guard.rs`). Absent = no checks.
+    #[serde(default)]
+    pub safety: Option<SafetySection>,
     /// Synthetic target (`--source sine`).
     #[serde(default)]
     pub sine: Vec<SineJoint>,
@@ -337,4 +340,50 @@ impl RobotProfile {
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         Ok((p, dir))
     }
+}
+
+/// `[safety]`: keep monitored points inside a box (world = base frame) and
+/// links apart.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SafetySection {
+    pub box_min: [f64; 3],
+    pub box_max: [f64; 3],
+    /// Points checked against the box, in addition to the TCP.
+    #[serde(default)]
+    pub points: Vec<SafetyPoint>,
+    #[serde(default = "yes")]
+    pub self_collision: bool,
+    /// Minimum distance kept between links [m].
+    #[serde(default = "default_collision_margin")]
+    pub collision_margin: f64,
+    /// Joint tracking only: the guard checks the reference against a box
+    /// shrunk by this much [m]. The arm follows the reference through a PD, so
+    /// it can be off by the tracking error (14 mm at the TCP in the sine test
+    /// with the default gains); the OSC needs no margin (it constrains the
+    /// measured state).
+    #[serde(default = "default_joint_margin")]
+    pub joint_margin: f64,
+    /// Pose (`[pose.*]`) at which link pairs already in contact are not
+    /// checked (vendor meshes interpenetrate when folded).
+    #[serde(default = "default_exclude_pose")]
+    pub exclude_at_pose: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SafetyPoint {
+    pub link: String,
+    #[serde(default)]
+    pub xyz: [f64; 3],
+}
+
+fn default_joint_margin() -> f64 {
+    0.02
+}
+fn default_collision_margin() -> f64 {
+    0.005
+}
+fn default_exclude_pose() -> String {
+    "rest".into()
 }

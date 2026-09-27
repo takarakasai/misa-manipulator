@@ -27,7 +27,7 @@ fn all_profiles_assemble() {
     for name in ["rebot_b601_dm", "rebot_b601_rs"] {
         let (p, arm) = robot(name);
         assert_eq!(arm.n(), 7, "{name}");
-        assemble::supervisor_config(&p, &arm);
+        assemble::supervisor_config(&p, &arm).unwrap();
         assemble::osc_config(&p, &arm).unwrap();
         assert_eq!(assemble::safety_config(&p, &arm).axes.len(), 7);
         // The gripper is outside the TCP chain (not part of OSC).
@@ -462,4 +462,184 @@ fn friction_sweep_recovers_the_plant() {
     let j2 = reparsed.joint.iter().find(|j| j.name == "joint2").unwrap();
     assert_eq!(j2.friction, 0.3, "untouched joint changed");
     assert_eq!(out.lines().count(), text.lines().count() + 2, "only a viscous line per written joint should be added");
+}
+
+/// The profiles' safety box contains the rest and ready poses (Park and the
+/// OSC start must not begin in violation), and self-collision is clear there.
+#[test]
+fn safety_box_contains_rest_and_ready() {
+    for name in ["rebot_b601_dm", "rebot_b601_rs"] {
+        let (p, arm) = robot(name);
+        let cfg = p.safety.as_ref().expect("profile has [safety]");
+        let rest = assemble::named_pose(&p, &arm, "rest").unwrap();
+        let g = crate::guard::SafetyModel::build(cfg, &arm, Some(rest.as_slice())).unwrap();
+        for pose in ["rest", "ready"] {
+            let q = assemble::named_pose(&p, &arm, pose).unwrap();
+            assert_eq!(g.violation(&arm, q.as_slice()), 0.0, "{name} {pose} violates [safety]");
+            assert_eq!(g.joint_violation(&arm, q.as_slice()), 0.0, "{name} {pose} violates [safety] with the joint margin");
+        }
+    }
+}
+
+/// Run the DM arm on the rigid plant (with friction and hardware effects) from
+/// [pose.ready] using a profile whose text is rewritten by `edit`; return the
+/// CSV as (header, rows).
+fn run_rigid_csv(
+    edit: impl Fn(String) -> String,
+    source: impl FnOnce(&RobotProfile, &manip_model::ArmModel) -> Source,
+    mode: Mode,
+    duration: f64,
+    tag: &str,
+) -> (Vec<String>, Vec<Vec<String>>, manip_model::ArmModel) {
+    let dir = std::env::temp_dir().join(format!("manip-safety-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let models = root().join("models").canonicalize().unwrap();
+    let text = std::fs::read_to_string(root().join("robots/rebot_b601_dm.toml"))
+        .unwrap()
+        .replace("../models", models.to_str().unwrap());
+    let path = dir.join("p.toml");
+    std::fs::write(&path, edit(text)).unwrap();
+    let (p, pdir) = RobotProfile::load(&path).unwrap();
+    let arm = assemble::load_arm(&p, &pdir).unwrap();
+    let friction = assemble::joints_in_order(&p, &arm).iter().map(|j| (j.sim_friction, j.sim_damping)).collect();
+    let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let rigid = RigidPlant::new(arm.clone(), q0, 1.0 / p.control.rate_hz, p.sim.timestep_s, friction, p.sim.friction_v_eps)
+        .unwrap();
+    let mut plant = EffectsPlant::new(
+        Box::new(rigid),
+        Effects {
+            command_delay_ticks: 1,
+            observation_delay_ticks: 0,
+            jitter_probability: 0.1,
+            quantization: Some(assemble::feedback_quantization(&p, &arm).unwrap()),
+            seed: 11,
+            period: std::time::Duration::from_secs_f64(1.0 / p.control.rate_hz),
+        },
+    );
+    let csv = dir.join("run.csv");
+    let src = source(&p, &arm);
+    app::run(
+        &p,
+        &arm,
+        &mut plant,
+        src,
+        RunOptions {
+            mode,
+            start_pose: assemble::named_pose(&p, &arm, "ready"),
+            duration_s: Some(duration),
+            fast: true,
+            record: Some(csv.clone()),
+            log: None,
+            status_every_s: 1e9,
+        },
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&csv).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut lines = text.lines();
+    let head = lines.next().unwrap().split(',').map(String::from).collect();
+    let rows = lines.map(|l| l.split(',').map(String::from).collect()).collect();
+    (head, rows, arm)
+}
+
+fn col_f(head: &[String], rows: &[Vec<String>], name: &str, mode: &str) -> Vec<f64> {
+    let c = head.iter().position(|h| h == name).unwrap();
+    let m = head.iter().position(|h| h == "mode").unwrap();
+    rows.iter().filter(|r| r[m] == mode).map(|r| r[c].parse::<f64>().unwrap()).collect()
+}
+
+fn with_floor(z: f64) -> impl Fn(String) -> String {
+    move |t: String| t.replace("box_min = [-0.50, -0.80, 0.03]", &format!("box_min = [-0.50, -0.80, {z:.4}]"))
+}
+
+fn no_safety(t: String) -> String {
+    let i = t.find("[safety]").unwrap();
+    let j = t[i..].find("# ── OSC").unwrap() + i;
+    format!("{}{}", &t[..i], &t[j..])
+}
+
+/// The OSC stops the TCP at a floor its target circle goes through.
+#[test]
+fn osc_stops_at_the_workspace_floor() {
+    let (_, arm) = robot("rebot_b601_dm");
+    let ready = [0.0, -1.2, -1.2, 0.3, 0.0, 0.0, 0.0];
+    let z0 = arm.tcp_pose(&ready).translation.z;
+    let floor = z0 - 0.04; // the 5 cm circle dips to z0 − 0.10
+    let circle = |_: &RobotProfile, _: &manip_model::ArmModel| Source::Circle { radius: 0.05, freq_hz: 0.25, start: None };
+    let (h, r, _) = run_rigid_csv(no_safety, circle, Mode::Osc, 8.0, "osc-free");
+    let free = col_f(&h, &r, "tcp_z", "Osc").into_iter().fold(f64::INFINITY, f64::min);
+    let (h, r, _) = run_rigid_csv(with_floor(floor), circle, Mode::Osc, 8.0, "osc-floor");
+    let guarded = col_f(&h, &r, "tcp_z", "Osc").into_iter().fold(f64::INFINITY, f64::min);
+    eprintln!("floor {floor:.4}: min tcp z free {free:.4}, with [safety] {guarded:.4}");
+    assert!(free < floor - 0.04, "the circle should cross the floor without [safety]");
+    assert!(guarded > floor - 0.002, "OSC went through the floor: {guarded:.4} < {floor:.4}");
+}
+
+/// Joint tracking refuses reference steps that would take the TCP below the floor.
+#[test]
+fn joint_guard_stops_at_the_workspace_floor() {
+    let sine = |p: &RobotProfile, arm: &manip_model::ArmModel| Source::Sine {
+        leader: manip_leader::synthetic::SineLeader::new(p.sine.clone()),
+        dofs: p.sine.iter().map(|s| arm.dof(&s.name).unwrap()).collect(),
+    };
+    let (h, r, _) = run_rigid_csv(no_safety, sine, Mode::Joint, 10.0, "joint-free");
+    let free = col_f(&h, &r, "tcp_z", "Joint").into_iter().fold(f64::INFINITY, f64::min);
+    let floor = free + 0.05;
+    let (h, r, _) = run_rigid_csv(with_floor(floor), sine, Mode::Joint, 10.0, "joint-floor");
+    let guarded = col_f(&h, &r, "tcp_z", "Joint").into_iter().fold(f64::INFINITY, f64::min);
+    eprintln!("floor {floor:.4}: min tcp z free {free:.4}, guarded {guarded:.4}");
+    assert!(guarded > floor, "joint tracking went through the floor: {guarded:.4} < {floor:.4}");
+}
+
+/// Joint tracking toward a self-colliding pose stops before the links touch.
+#[test]
+fn joint_guard_prevents_self_collision() {
+    let (p, arm) = robot("rebot_b601_dm");
+    let cfg = p.safety.as_ref().unwrap();
+    let rest = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let mut sc = manip_model::collision::SelfCollision::build(&arm).unwrap();
+    sc.exclude_close_at(&arm, rest.as_slice(), cfg.collision_margin);
+    let g = crate::guard::SafetyModel::build(cfg, &arm, Some(rest.as_slice())).unwrap();
+    // Deterministic search for a pose that is inside the box but self-colliding,
+    // near the ready pose (so the arm can head there from ready).
+    let ready = assemble::named_pose(&p, &arm, "ready").unwrap();
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut rnd = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let target = (0..20000)
+        .find_map(|_| {
+            let q: Vec<f64> = arm
+                .dofs()
+                .iter()
+                .enumerate()
+                .map(|(i, d)| if i < 6 { d.clamp(ready[i] + (rnd() - 0.5) * 3.0) } else { 0.0 })
+                .collect();
+            let dmin = sc.min_distance(&arm, &q);
+            (dmin < -0.01 && g.violation(&arm, &q) - (cfg.collision_margin - dmin) < 1e-9).then_some(q)
+        })
+        .expect("no self-colliding pose found");
+    eprintln!("target {:?}: distance {:.4}", target.iter().map(|x| (x * 100.0).round() / 100.0).collect::<Vec<_>>(), sc.min_distance(&arm, &target));
+    let names: Vec<String> = arm.dofs().iter().map(|d| d.name.clone()).collect();
+    let hold = |_: &RobotProfile, arm: &manip_model::ArmModel| Source::Sine {
+        leader: manip_leader::synthetic::SineLeader::new(
+            names
+                .iter()
+                .zip(&target)
+                .map(|(n, &c)| manip_leader::synthetic::SineJoint { name: n.clone(), center: c, amp: 0.0, freq_hz: 0.1, phase: 0.0 })
+                .collect(),
+        ),
+        dofs: (0..arm.n()).collect(),
+    };
+    let (h, r, arm) = run_rigid_csv(|t| t, hold, Mode::Joint, 8.0, "selfcol");
+    let cols: Vec<Vec<f64>> = names.iter().map(|n| col_f(&h, &r, &format!("q_{n}"), "Joint")).collect();
+    let dmin = (0..cols[0].len())
+        .step_by(10)
+        .map(|k| sc.min_distance(&arm, &cols.iter().map(|c| c[k]).collect::<Vec<_>>()))
+        .fold(f64::INFINITY, f64::min);
+    eprintln!("closest approach while tracking: {dmin:.4} m");
+    assert!(dmin > 0.0, "links touched: {dmin:.4}");
 }

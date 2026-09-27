@@ -123,3 +123,27 @@ fn unknown_tcp_link_is_rejected() {
     let e = ArmModel::from_file(file, &TcpSpec::at_link("nope")).unwrap_err();
     assert!(matches!(e, ModelError::UnknownLink(_)));
 }
+
+#[test]
+fn self_collision_on_the_b601() {
+    use crate::collision::SelfCollision;
+    let path = format!("{}/../../models/rebot_b601_dm/rebot_b601_dm.misa", env!("CARGO_MANIFEST_DIR"));
+    let arm = ArmModel::load(path, &TcpSpec::at_link("end_link")).unwrap();
+    let mut sc = SelfCollision::build(&arm).unwrap();
+    let before = sc.pair_count();
+    let rest = vec![0.0; arm.n()];
+    let dropped = sc.exclude_close_at(&arm, &rest, 0.005);
+    eprintln!("pairs {before} -> {} ; dropped at rest: {dropped:?}", sc.pair_count());
+    let ready = [0.0, -1.2, -1.2, 0.3, 0.0, 0.0, 0.01];
+    let t0 = std::time::Instant::now();
+    let d_ready = sc.min_distance(&arm, &ready);
+    eprintln!("min distance at ready {d_ready:.4} m ({:?})", t0.elapsed());
+    for p in sc.close_pairs(&arm, &ready, 0.05) {
+        eprintln!("  ready: {} - {} {:.4}", p.link_a, p.link_b, p.distance);
+    }
+    assert!(d_ready > 0.005, "ready pose should be clear: {d_ready}");
+    // Elbow folded hard with the wrist bent back toward the upper arm / base.
+    let tight = [0.0, -0.3, -2.9, -1.8, 0.0, 0.0, 0.0];
+    let close = sc.close_pairs(&arm, &tight, 0.05);
+    eprintln!("tight pose: {:?}", close.iter().take(3).map(|p| (&p.link_a, &p.link_b, p.distance)).collect::<Vec<_>>());
+}

@@ -15,6 +15,7 @@ mod app;
 mod assemble;
 mod config;
 mod effects;
+mod guard;
 mod hw;
 mod policy;
 mod record;

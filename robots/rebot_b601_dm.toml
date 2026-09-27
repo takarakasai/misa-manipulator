@@ -143,6 +143,23 @@ joint2 = -1.2
 joint3 = -1.2
 joint4 = 0.3
 
+# ── Safety: workspace box and self-collision ─────────────────────
+# Monitored points (the TCP plus these link origins) stay inside the box, in
+# the base frame (z = 0 at the bottom of the base, i.e. the table top). The OSC
+# enforces it with barrier functions; joint tracking refuses reference steps
+# that would leave it. Park is not guarded. Adjust the box to the actual table
+# and surroundings before running on hardware.
+# Self-collision uses convex hulls of the collision meshes; link pairs already
+# touching at exclude_at_pose (the folded rest pose, where the vendor meshes
+# interpenetrate) are not checked.
+[safety]
+box_min = [-0.50, -0.80, 0.03]
+box_max = [0.85, 0.80, 0.95]
+points = [{ link = "link3" }, { link = "link5" }]
+self_collision = true
+collision_margin = 0.005
+exclude_at_pose = "rest"
+
 # ── OSC (operational space control) ─────────────────────────────────
 [osc]
 kp_lin = 400.0

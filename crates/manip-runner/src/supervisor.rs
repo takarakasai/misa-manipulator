@@ -72,6 +72,9 @@ pub struct TickInfo {
     pub osc: Option<OscReport>,
     /// Whether the mode changed this cycle (and if so, why).
     pub transition: Option<String>,
+    /// Joint mode: the reference step was refused by the workspace /
+    /// self-collision guard and the reference held.
+    pub guarded: bool,
 }
 
 pub struct SupervisorConfig {
@@ -88,6 +91,8 @@ pub struct SupervisorConfig {
     pub rest: DVector<f64>,
     /// Friction feedforward for the tracking law (reference velocity). `None` = off.
     pub friction: Option<manip_control::FrictionModel>,
+    /// Workspace box and self-collision (`[safety]`). `None` = unchecked.
+    pub safety: Option<crate::guard::SafetyModel>,
 }
 
 pub struct Supervisor {
@@ -187,7 +192,30 @@ impl Supervisor {
                     Target::Tcp { posture, .. } => clamp_to_limits(arm, posture),
                     Target::None => self.shaper.current().q.clone(),
                 };
-                let r = self.shaper.step(&goal, dt).clone();
+                let prev = self.shaper.current().clone();
+                let mut r = self.shaper.step(&goal, dt).clone();
+                if let Some(g) = &self.cfg.safety {
+                    // Judge where the reference would come to rest if it braked
+                    // now, not where it is, and brake gently (a quarter of the
+                    // shaper's acceleration limit). Halting the reference at the
+                    // wall, or braking at the full limit, let the arm (which
+                    // follows through a lightly damped PD) overshoot by 1–1.5 cm.
+                    // A step whose stopping point is worse than the previous
+                    // one's is replaced by braking; a step that improves things
+                    // is allowed (an arm starting outside can come back).
+                    let a_brake: DVector<f64> = self.cfg.shaper.a_max.map(|a| (a * BRAKE_FRACTION).max(1e-6));
+                    let stop = |r: &JointRef| {
+                        DVector::from_iterator(
+                            r.q.len(),
+                            (0..r.q.len()).map(|i| r.q[i] + r.v[i] * r.v[i].abs() / (2.0 * a_brake[i])),
+                        )
+                    };
+                    if g.joint_violation(arm, stop(&r).as_slice()) > g.joint_violation(arm, stop(&prev).as_slice()) + 1e-9 {
+                        r = brake(&prev, &a_brake, dt);
+                        self.shaper.restore(r.clone());
+                        info.guarded = true;
+                    }
+                }
                 let mut c = self.track.command(arm, s, &r);
                 scale_gains(&mut c, ramp);
                 info.reference = Some(r);
@@ -212,7 +240,8 @@ impl Supervisor {
                 info.tcp_reference = Some(tr.pose);
                 // DOFs that don't move the TCP (gripper) are tracked with joint impedance.
                 let base = self.track.command(arm, s, &pr);
-                match self.osc.command(arm, s, &tcp_ref, &pr, dt, base) {
+                let cbfs = self.cfg.safety.as_ref().map(|g| g.cbfs(arm, s)).unwrap_or_default();
+                match self.osc.command_with(arm, s, &tcp_ref, &pr, dt, base, &cbfs) {
                     Ok((c, report)) => {
                         info.osc = Some(report);
                         info.reference = Some(pr);
@@ -260,6 +289,24 @@ fn step_with_limits(shaper: &mut JointShaper, limits: &ShaperLimits, goal: &DVec
     let r = tmp.step(goal, dt).clone();
     shaper.restore(r.clone());
     r
+}
+
+/// Fraction of the shaper's acceleration limit used when the safety guard
+/// brakes the joint reference.
+const BRAKE_FRACTION: f64 = 0.25;
+
+/// One step of braking `r` to rest at `a_brake` per joint.
+fn brake(r: &JointRef, a_brake: &DVector<f64>, dt: f64) -> JointRef {
+    let n = r.q.len();
+    let mut out = r.clone();
+    for i in 0..n {
+        let dv = (a_brake[i] * dt).min(r.v[i].abs());
+        let v_new = r.v[i] - dv.copysign(r.v[i]);
+        out.a[i] = (v_new - r.v[i]) / dt;
+        out.q[i] = r.q[i] + 0.5 * (r.v[i] + v_new) * dt;
+        out.v[i] = v_new;
+    }
+    out
 }
 
 fn clamp_to_limits(arm: &ArmModel, q: &DVector<f64>) -> DVector<f64> {

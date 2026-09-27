@@ -962,6 +962,7 @@ dependencies = [
  "misarta",
  "misarta-formats",
  "nalgebra",
+ "parry3d-f64",
  "serde",
  "thiserror 2.0.21",
 ]

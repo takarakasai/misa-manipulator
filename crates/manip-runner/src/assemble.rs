@@ -67,10 +67,10 @@ pub fn named_pose(p: &RobotProfile, arm: &ArmModel, name: &str) -> Option<DVecto
     arm.named_pose(name, &zero).ok()
 }
 
-pub fn supervisor_config(p: &RobotProfile, arm: &ArmModel) -> SupervisorConfig {
+pub fn supervisor_config(p: &RobotProfile, arm: &ArmModel) -> Result<SupervisorConfig, String> {
     let js = joints_in_order(p, arm);
     let c = &p.control;
-    SupervisorConfig {
+    Ok(SupervisorConfig {
         track: JointGains::new(col(&js, |j| j.kp), col(&js, |j| j.kd)),
         hold: JointGains::new(
             col(&js, |j| j.hold_kp.unwrap_or(j.kp)),
@@ -96,7 +96,14 @@ pub fn supervisor_config(p: &RobotProfile, arm: &ArmModel) -> SupervisorConfig {
         },
         rest: named_pose(p, arm, "rest").unwrap_or_else(|| DVector::zeros(arm.n())),
         friction: friction_model(p, arm, p.control.friction_v_eps),
-    }
+        safety: match &p.safety {
+            Some(cfg) => {
+                let exclude = named_pose(p, arm, &cfg.exclude_at_pose);
+                Some(crate::guard::SafetyModel::build(cfg, arm, exclude.as_ref().map(|q| q.as_slice()))?)
+            }
+            None => None,
+        },
+    })
 }
 
 pub fn osc_config(p: &RobotProfile, arm: &ArmModel) -> Result<OscConfig, String> {

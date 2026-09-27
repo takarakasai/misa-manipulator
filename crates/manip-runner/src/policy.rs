@@ -40,7 +40,7 @@ impl Policy {
     pub fn new(profile: &RobotProfile, arm: &ArmModel, q0: &DVector<f64>) -> Result<Self, String> {
         Ok(Self {
             sup: Supervisor::new(
-                assemble::supervisor_config(profile, arm),
+                assemble::supervisor_config(profile, arm)?,
                 Osc::new(assemble::osc_config(profile, arm)?),
                 arm,
                 q0,

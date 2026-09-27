@@ -32,6 +32,8 @@ use nalgebra::{DMatrix, DVector, Isometry3, Translation3, UnitQuaternion, Vector
 
 pub use misarta;
 
+pub mod collision;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ModelError {
     #[error("cannot load model ({path}): {msg}")]
@@ -147,6 +149,19 @@ pub struct ArmModel {
     g_proj: DMatrix<f64>,
     tcp: Frame<f64>,
     tcp_spec: TcpSpec,
+    /// Directory the model was loaded from (mesh paths in the `.misa` are
+    /// relative to it). `None` for models built in memory.
+    source_dir: Option<std::path::PathBuf>,
+}
+
+/// Kinematics of one point fixed to a link: world position, velocity, the
+/// 3 × n linear Jacobian (independent DOFs) and its bias `J̇·v`.
+#[derive(Debug, Clone)]
+pub struct PointState {
+    pub p: nalgebra::Vector3<f64>,
+    pub v: nalgebra::Vector3<f64>,
+    pub jacobian: DMatrix<f64>,
+    pub jdot_v: nalgebra::Vector3<f64>,
 }
 
 impl ArmModel {
@@ -157,6 +172,7 @@ impl ArmModel {
             path: path.display().to_string(),
             msg,
         };
+        let dir = path.parent().map(|d| d.to_path_buf());
         let file = match path.extension().and_then(|e| e.to_str()) {
             Some("urdf") | Some("URDF") => {
                 misarta_formats::urdf::import(path).map_err(load_err)?.file
@@ -167,7 +183,9 @@ impl ArmModel {
                     .file
             }
         };
-        Self::from_file(file, tcp)
+        let mut arm = Self::from_file(file, tcp)?;
+        arm.source_dir = dir;
+        Ok(arm)
     }
 
     /// Builds from an already-loaded [`MisaFile`].
@@ -206,6 +224,7 @@ impl ArmModel {
             g_proj,
             tcp: tcp_frame,
             tcp_spec: tcp.clone(),
+            source_dir: None,
         })
     }
 
@@ -420,6 +439,68 @@ impl ArmModel {
     /// TCP `J̇·v`. To also work for frames with an offset, takes a central
     /// difference of the frame Jacobian along `v` (same approach as misarta's
     /// joint version).
+    /// Directory the model was loaded from, if any.
+    pub fn source_dir(&self) -> Option<&std::path::Path> {
+        self.source_dir.as_deref()
+    }
+
+    /// misarta joint index whose child link is `link`.
+    pub fn link_joint(&self, link: &str) -> Result<usize, ModelError> {
+        self.model
+            .link_names
+            .iter()
+            .position(|l| l == link)
+            .ok_or_else(|| ModelError::UnknownLink(link.to_string()))
+    }
+
+    /// Kinematics of the point `local` (in the frame of `link`).
+    pub fn point_state(&self, q: &[f64], v: &[f64], link: &str, local: nalgebra::Vector3<f64>) -> Result<PointState, ModelError> {
+        let frame = Frame {
+            name: format!("{link}+point"),
+            parent_joint: self.link_joint(link)?,
+            placement: Isometry3::from_parts(Translation3::from(local), UnitQuaternion::identity()),
+        };
+        let qf = self.full_q(q);
+        let vf = self.full_v(v);
+        let data = misarta::fk::forward_kinematics(&self.model, &qf);
+        let pose = frames::compute_frame_placement_from_data(&data, &frame);
+        let jf = frames::compute_frame_jacobian_from_data(&self.model, &qf, &data, &frame);
+        let jac = jf.rows(3, 3).into_owned() * &self.g_proj;
+        let vv = DVector::from_column_slice(&vf);
+        let pv = jf.rows(3, 3) * &vv;
+        let eps = 1e-6;
+        let qp = misarta::manifold::integrate(&self.model, &qf, &vf, eps);
+        let qm = misarta::manifold::integrate(&self.model, &qf, &vf, -eps);
+        let vp = frames::compute_frame_jacobian(&self.model, &qp, &frame).rows(3, 3) * &vv;
+        let vm = frames::compute_frame_jacobian(&self.model, &qm, &frame).rows(3, 3) * &vv;
+        let jdv = (vp - vm) / (2.0 * eps);
+        Ok(PointState {
+            p: pose.translation.vector,
+            v: nalgebra::Vector3::new(pv[0], pv[1], pv[2]),
+            jacobian: jac,
+            jdot_v: nalgebra::Vector3::new(jdv[0], jdv[1], jdv[2]),
+        })
+    }
+
+    /// 3 × n linear Jacobian (independent DOFs) of the world point `p` taken
+    /// as fixed to the link of misarta joint `joint`, at configuration `q`.
+    pub fn point_jacobian_at(&self, q: &[f64], joint: usize, p: &nalgebra::Vector3<f64>) -> DMatrix<f64> {
+        let qf = self.full_q(q);
+        let data = misarta::fk::forward_kinematics(&self.model, &qf);
+        let local = data.oMi[joint].inverse_transform_point(&nalgebra::Point3::from(*p));
+        let frame = Frame {
+            name: "witness".into(),
+            parent_joint: joint,
+            placement: Isometry3::from_parts(Translation3::from(local.coords), UnitQuaternion::identity()),
+        };
+        frames::compute_frame_jacobian_from_data(&self.model, &qf, &data, &frame).rows(3, 3).into_owned() * &self.g_proj
+    }
+
+    /// World pose of every misarta joint frame at `q` (index = joint index).
+    pub fn joint_poses(&self, q: &[f64]) -> Vec<Isometry3<f64>> {
+        misarta::fk::forward_kinematics(&self.model, &self.full_q(q)).oMi
+    }
+
     fn frame_jdot_v(&self, qf: &[f64], vf: &[f64]) -> Vector6<f64> {
         let eps = 1e-6;
         let q_plus = misarta::manifold::integrate(&self.model, qf, vf, eps);

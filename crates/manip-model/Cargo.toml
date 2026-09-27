@@ -15,6 +15,9 @@ authors.workspace = true
 [dependencies]
 misarta = { workspace = true }
 misarta-formats = { workspace = true }
+# Same version as misarta uses, so the shapes are the same crate. Convex hulls
+# for the per-cycle self-collision check (collision.rs).
+parry3d = { package = "parry3d-f64", version = "0.25" }
 nalgebra = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

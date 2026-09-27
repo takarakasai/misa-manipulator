@@ -43,6 +43,7 @@ use misa_wbc::dynamics::{Dynamics, Formulation};
 use misa_wbc::solve::{SolveConfig, SolveStatus, Solver};
 use misa_wbc::tasks::{self, JointLimitCbf};
 use misa_wbc::Task;
+use misa_wbc::AsAffine;
 use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Vector6};
 
 use crate::command::{AxisCmd, JointCommand};
@@ -66,6 +67,20 @@ impl TcpRef {
             accel: Vector6::zeros(),
         }
     }
+}
+
+/// A second-order control barrier on some scalar `h(q) ≥ 0` (distance to a
+/// workspace wall, distance between two links): `ḧ = grad·q̈ + drift`, and the
+/// OSC keeps `ḧ + (α1+α2)ḣ + α1α2·h ≥ 0` (the joint-limit CBF's `α`), so `h`
+/// decays to 0 no faster than a critically damped approach and never crosses.
+#[derive(Debug, Clone)]
+pub struct Cbf {
+    /// `∂ḣ/∂q̈`, length = independent DOFs (entries off the TCP chain are ignored).
+    pub grad: DVector<f64>,
+    /// The part of `ḧ` that does not depend on `q̈` (e.g. `n·J̇v`).
+    pub drift: f64,
+    pub h: f64,
+    pub h_dot: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +231,22 @@ impl Osc {
         dt: f64,
         base: JointCommand,
     ) -> Result<(JointCommand, OscReport), OscError> {
+        self.command_with(arm, s_full, tcp, posture_full, dt, base, &[])
+    }
+
+    /// [`Self::command`] with extra safety constraints in level 0 (workspace
+    /// box, self-collision distances; see [`Cbf`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn command_with(
+        &mut self,
+        arm: &ArmModel,
+        s_full: &ArmState,
+        tcp: &TcpRef,
+        posture_full: &JointRef,
+        dt: f64,
+        base: JointCommand,
+        cbfs: &[Cbf],
+    ) -> Result<(JointCommand, OscReport), OscError> {
         let idx = arm.tcp_chain();
         let n = idx.len();
         let c = &self.cfg;
@@ -275,6 +306,14 @@ impl Osc {
             + tasks::joint_limit_cbf(d.qddot(), &s.q, &s.v, &cbf);
         if let Some(eom) = d.dynamics_task().filter(|t| t.n_eq() + t.n_iq() > 0) {
             level0 = eom + level0;
+        }
+        // Safety barriers: ḧ + (α1+α2)·ḣ + α1·α2·h ≥ 0 with ḧ = grad·q̈ + drift.
+        let (a1, a2) = (c.cbf_alpha, c.cbf_alpha);
+        for b in cbfs {
+            let g = DMatrix::from_row_slice(1, n, &idx.iter().map(|&i| b.grad[i]).collect::<Vec<_>>());
+            let expr = &(&g * &d.qddot().as_affine()) + &DVector::from_element(1, b.drift);
+            let lb = DVector::from_element(1, -(a1 + a2) * b.h_dot - a1 * a2 * b.h);
+            level0 = level0 + Task::ge(&expr, &lb);
         }
 
         // ── level 1: TCP ───────────────────────────────────────────────

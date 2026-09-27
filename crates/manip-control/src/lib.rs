@@ -40,5 +40,5 @@ pub use command::{AxisCmd, JointCommand};
 pub use friction::FrictionModel;
 pub use gains::JointGains;
 pub use joint::{Feedforward, JointImpedance};
-pub use osc::{Osc, OscConfig, OscError, OscReport, TcpRef};
+pub use osc::{Cbf, Osc, OscConfig, OscError, OscReport, TcpRef};
 pub use shaper::{JointRef, JointShaper, ShaperLimits, TcpShaper, TcpShaperLimits};
