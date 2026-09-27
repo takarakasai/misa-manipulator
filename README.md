@@ -1,5 +1,7 @@
 # misa-manipulator
 
+[![CI](https://github.com/takarakasai/misa-manipulator/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/takarakasai/misa-manipulator/actions/workflows/ci.yml)
+
 [misarta](https://github.com/takarakasai/misarta)（剛体力学）と
 [misa-wbc](https://github.com/takarakasai/misa-wbc)（階層 QP）を使った
 **モデルベースのマニピュレータ制御**。ロボット 1 台は「モデル（`.misa`）+
