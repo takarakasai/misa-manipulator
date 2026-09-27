@@ -16,17 +16,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use manip_control::{JointCommand, Osc};
 use manip_leader::synthetic::SineLeader;
 use manip_leader::LeaderThread;
 use manip_model::{ArmModel, ArmState};
-use misa_core::{AxisCommand, AxisId, Command, ControlMode, Observation, Plant, SafetyGate};
+use misa_core::{AxisId, Command, Observation, Plant};
 use nalgebra::{DVector, Isometry3, Translation3, Vector3};
 
-use crate::assemble::{self, TeleopMapping};
+use crate::assemble::TeleopMapping;
 use crate::config::RobotProfile;
+use crate::policy::Policy;
 use crate::record::Recorder;
-use crate::supervisor::{Mode, Supervisor, Target};
+use crate::replay::{self, LogWriter};
+use crate::supervisor::{Mode, Target};
 
 /// Where the target comes from.
 pub enum Source {
@@ -86,6 +87,9 @@ pub struct RunOptions {
     /// Run without waiting for real time (only with sim + synthetic target).
     pub fast: bool,
     pub record: Option<std::path::PathBuf>,
+    /// Binary run log for bit-exact replay (`manip replay`), and the profile
+    /// path it records.
+    pub log: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// Status display interval [s].
     pub status_every_s: f64,
 }
@@ -127,7 +131,7 @@ pub fn run(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let (mut q, mut v) = read_state(&obs);
+    let (q, _) = read_state(&obs);
     // Don't energize if starting far outside the range of motion. The most likely
     // cause is a **mixed-up zero point or sign** (profile sign / zero, motor zeroing),
     // and energizing anyway makes the shaper drive at full force "into range".
@@ -153,15 +157,13 @@ pub fn run(
     }
     log::info!("initial pose {:?}", q.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>());
 
-    let mut sup = Supervisor::new(
-        assemble::supervisor_config(profile, arm),
-        Osc::new(assemble::osc_config(profile, arm)?),
-        arm,
-        &q,
-    );
-    let mut gate = SafetyGate::new(assemble::safety_config(profile, arm));
+    let mut policy = Policy::new(profile, arm, &q)?;
     let mut rec = match &opts.record {
         Some(p) => Some(Recorder::create(p, arm).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let mut log = match &opts.log {
+        Some((path, profile_path)) => Some(LogWriter::create(path, &replay::header(profile, profile_path, arm, &q)?)?),
         None => None,
     };
 
@@ -180,7 +182,6 @@ pub fn run(
     }
 
     plant.arm()?;
-    let mut cmd = Command::idle(n);
     let t0 = Instant::now();
     let mut t = 0.0;
     let mut next = Instant::now();
@@ -192,42 +193,52 @@ pub fn run(
     let mut last_gate_log = -1.0;
     let result: Result<(), String> = loop {
         let tick_start = Instant::now();
-        let s = arm.evaluate(q.as_slice(), v.as_slice());
+        let s = Policy::state(arm, &obs);
 
-        // Mode requests: go to the requested mode once the startup ramp is done.
+        // Mode requests. Decided here (they depend on time, Ctrl-C and the
+        // startup sequence) and handed to the policy as recorded inputs.
+        // `pending` is the mode the policy will be in after the requests so far.
         let k = interrupts.load(Ordering::SeqCst);
         if k >= 2 {
             break Ok(());
         }
-        if k == 1 && !matches!(sup.mode(), Mode::Park | Mode::Done) {
-            sup.request(Mode::Park, arm, &s);
+        if policy.mode() == Mode::Done {
+            log::info!("finished folding");
+            break Ok(());
         }
-        let parking = matches!(sup.mode(), Mode::Park | Mode::Done);
-        if let Some(d) = opts.duration_s.filter(|&d| t >= d && !parking) {
-            log::info!("{d:.1} s elapsed, folding to rest pose");
-            sup.request(Mode::Park, arm, &s);
+        let mut requests = Vec::new();
+        let mut pending = policy.mode();
+        let push = |m: Mode, requests: &mut Vec<Mode>, pending: &mut Mode| {
+            if m != *pending {
+                requests.push(m);
+                *pending = m;
+            }
+        };
+        if k == 1 && !matches!(pending, Mode::Park | Mode::Done) {
+            push(Mode::Park, &mut requests, &mut pending);
         }
-        if !requested && t >= profile.control.startup_ramp_s && k == 0 {
+        let parking = matches!(pending, Mode::Park | Mode::Done);
+        if opts.duration_s.is_some_and(|d| t >= d) && !parking {
+            log::info!("{:.1} s elapsed, folding to rest pose", opts.duration_s.unwrap());
+            push(Mode::Park, &mut requests, &mut pending);
+        }
+        if !requested && t >= profile.control.startup_ramp_s && k == 0 && !parking {
             match &opts.start_pose {
-                Some(goal) if !approaching => {
-                    sup.request(Mode::Joint, arm, &s);
+                Some(_) if !approaching => {
+                    push(Mode::Joint, &mut requests, &mut pending);
                     approaching = true;
                     log::info!("moving to start pose");
                 }
                 Some(goal) if (&s.q - goal).amax() < profile.control.park_tolerance && s.v.amax() < 0.05 => {
-                    sup.request(opts.mode, arm, &s);
+                    push(opts.mode, &mut requests, &mut pending);
                     requested = true;
                 }
                 Some(_) => {}
                 None => {
-                    sup.request(opts.mode, arm, &s);
+                    push(opts.mode, &mut requests, &mut pending);
                     requested = true;
                 }
             }
-        }
-        if sup.mode() == Mode::Done {
-            log::info!("finished folding");
-            break Ok(());
         }
 
         let keep = s.q.clone();
@@ -235,27 +246,30 @@ pub fn run(
             (Some(goal), false) => Target::Joint(goal.clone()),
             _ => source.target(arm, t, &keep, &s),
         };
-        let (jc, info) = sup.tick(arm, &s, &target, dt);
-        if let Some(tr) = &info.transition {
+        let out = policy.step(arm, &obs, &requests, &target);
+        if let Some(tr) = &out.info.transition {
             log::info!("{tr}");
         }
-        to_command(&jc, &mut cmd);
-        let verdict = gate.apply(&mut cmd, &obs, Duration::from_secs_f64(dt));
-        if !verdict.is_clean() && t - last_gate_log > 1.0 {
-            log::warn!("SafetyGate: {verdict:?}");
+        if !out.verdict.is_clean() && t - last_gate_log > 1.0 {
+            log::warn!("SafetyGate: {:?}", out.verdict);
             last_gate_log = t;
         }
         let tick_us = tick_start.elapsed().as_secs_f64() * 1e6;
         max_tick_us = max_tick_us.max(tick_us);
         if let Some(r) = rec.as_mut() {
-            r.row(t, sup.mode(), tick_us, &s, &jc, &info).map_err(|e| e.to_string())?;
+            r.row(t, policy.mode(), tick_us, &out.state, &out.joint_command, &out.info)
+                .map_err(|e| e.to_string())?;
         }
+        if let Some(l) = log.as_mut() {
+            l.frame(t, &obs, &requests, &target, policy.command(), &out.verdict)?;
+        }
+        let s = out.state;
+        let cmd = policy.command().clone();
 
         if let Err(e) = plant.exchange(&cmd, &mut obs) {
             break Err(e);
         }
-        (q, v) = read_state(&obs);
-        if q.iter().any(|x| !x.is_finite()) {
+        if obs.axes().iter().any(|a| !a.position_rad.is_finite()) {
             break Err("NaN in observation".into());
         }
 
@@ -270,7 +284,7 @@ pub fn run(
             };
             eprintln!(
                 "t={t:6.2} {:?} tcp=[{:+.3} {:+.3} {:+.3}] tick max {:.0}µs overrun {overruns} {}{}",
-                sup.mode(),
+                policy.mode(),
                 p.x,
                 p.y,
                 p.z,
@@ -301,8 +315,11 @@ pub fn run(
     // operator pressed Ctrl-C a second time, or when the Plant failed.
     let _ = plant.exchange(&Command::idle(n), &mut obs);
     plant.disarm()?;
-    if sup.osc_failures > 0 {
-        log::warn!("times OSC failed to solve and fell back to hold: {}", sup.osc_failures);
+    if let Some(l) = log {
+        l.finish()?;
+    }
+    if policy.osc_failures() > 0 {
+        log::warn!("times OSC failed to solve and fell back to hold: {}", policy.osc_failures());
     }
     result
 }
@@ -311,19 +328,4 @@ fn read_state(obs: &Observation) -> (DVector<f64>, DVector<f64>) {
     let q = DVector::from_iterator(obs.len(), obs.axes().iter().map(|a| a.position_rad));
     let v = DVector::from_iterator(obs.len(), obs.axes().iter().map(|a| a.velocity_rad_s));
     (q, v)
-}
-
-fn to_command(jc: &JointCommand, cmd: &mut Command) {
-    for (i, a) in jc.axes.iter().enumerate() {
-        if let Some(c) = cmd.get_mut(AxisId::new(i as u16)) {
-            *c = AxisCommand {
-                mode: ControlMode::Impedance,
-                position_rad: a.q,
-                velocity_rad_s: a.v,
-                torque_ff_nm: a.tau,
-                kp_nm_per_rad: a.kp,
-                kd_nm_s_per_rad: a.kd,
-            };
-        }
-    }
 }

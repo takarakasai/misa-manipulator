@@ -34,7 +34,7 @@ use manip_control::{
 use manip_model::{ArmModel, ArmState};
 use nalgebra::{DVector, Isometry3};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
 pub enum Mode {
     /// Hold in place (hold gains + gravity FF).
     Hold,

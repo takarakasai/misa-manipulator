@@ -66,6 +66,9 @@ ctrlc = "3"
 zenoh = "1.9"
 serde_json = "1"
 approx = "0.5"
+# Binary run log (manip replay): no_std-friendly, small encoding, same format
+# as misa-runner's recorder.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 [profile.release]
 # To reduce control-loop jitter. debug=true only adds symbols and does not affect speed.

@@ -86,6 +86,12 @@ manip run --robot robots/rebot_b601_dm.toml --plant can --source leader --leader
 
 # 記録（CSV: 関節ごとの q, v, qref, vref, τ と TCP）
 manip run ... --record logs/run.csv
+
+# 実行ログ（バイナリ）と再生。記録した観測・モード要求・目標をいまのコードに
+# 通し直し、指令が 1 bit でも変われば報告して非 0 で終わる（改修の回帰確認用）
+manip run ... --log logs/run.mrec
+manip replay logs/run.mrec                 # 記録時のプロファイルで
+manip replay logs/run.mrec --robot <別のプロファイル>
 ```
 
 Ctrl-C 1 回目で休止姿勢へ畳んでから脱力、2 回目で即脱力（**腕は落ちる**）。

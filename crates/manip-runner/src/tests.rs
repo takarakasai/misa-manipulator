@@ -135,9 +135,82 @@ fn rigid_closed_loop_runs_to_done() {
                 duration_s: Some(5.0),
                 fast: true,
                 record: None,
+                log: None,
                 status_every_s: 1e9,
             },
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     }
+}
+
+/// Record a run (rigid plant + hardware effects, OSC), replay it: every command
+/// must match bit for bit. Replaying with a profile that differs by one gain
+/// must be caught.
+#[test]
+fn replay_is_bit_exact_and_catches_changes() {
+    let dir = std::env::temp_dir().join(format!("manip-replay-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let models = root().join("models").canonicalize().unwrap();
+    let text = std::fs::read_to_string(root().join("robots/rebot_b601_dm.toml"))
+        .unwrap()
+        .replace("../models", models.to_str().unwrap());
+    let profile_path = dir.join("dm.toml");
+    std::fs::write(&profile_path, &text).unwrap();
+    let changed_path = dir.join("dm_changed.toml");
+    std::fs::write(&changed_path, text.replace("kp_lin = 400.0", "kp_lin = 401.0")).unwrap();
+    assert_ne!(std::fs::read_to_string(&changed_path).unwrap(), text, "kp_lin not found in profile");
+
+    let (p, pdir) = RobotProfile::load(&profile_path).unwrap();
+    let arm = assemble::load_arm(&p, &pdir).unwrap();
+    let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let friction = assemble::joints_in_order(&p, &arm)
+        .iter()
+        .map(|j| (j.sim_friction, j.sim_damping))
+        .collect();
+    let rigid = RigidPlant::new(arm.clone(), q0, 1.0 / p.control.rate_hz, p.sim.timestep_s, friction, p.sim.friction_v_eps)
+        .unwrap();
+    let fx = p.sim.effects.as_ref().unwrap();
+    let mut plant = EffectsPlant::new(
+        Box::new(rigid),
+        Effects {
+            command_delay_ticks: fx.command_delay_ticks,
+            observation_delay_ticks: 0,
+            jitter_probability: fx.jitter_probability,
+            quantization: Some(assemble::feedback_quantization(&p, &arm).unwrap()),
+            seed: 7,
+            period: std::time::Duration::from_secs_f64(1.0 / p.control.rate_hz),
+        },
+    );
+    let log = dir.join("run.mrec");
+    app::run(
+        &p,
+        &arm,
+        &mut plant,
+        Source::Circle { radius: 0.04, freq_hz: 0.3, start: None },
+        RunOptions {
+            mode: Mode::Osc,
+            start_pose: assemble::named_pose(&p, &arm, "ready"),
+            duration_s: Some(4.0),
+            fast: true,
+            record: None,
+            log: Some((log.clone(), profile_path.clone())),
+            status_every_s: 1e9,
+        },
+    )
+    .unwrap();
+
+    let (header, frames) = crate::replay::read_log(&log).unwrap();
+    assert!(frames.len() > 1000, "{} frames", frames.len());
+    assert!(frames.iter().any(|f| f.requests.contains(&Mode::Osc)), "never entered OSC");
+
+    let (rp, rtext, rarm) = crate::replay::load_for_replay(&header, None).unwrap();
+    let same = crate::replay::replay(&header, &frames, &rp, &rtext, &rarm, 10).unwrap();
+    assert!(!same.profile_changed);
+    assert!(same.divergences.is_empty(), "{:?}", same.divergences);
+
+    let (cp, ctext, carm) = crate::replay::load_for_replay(&header, Some(&changed_path)).unwrap();
+    let changed = crate::replay::replay(&header, &frames, &cp, &ctext, &carm, 10).unwrap();
+    assert!(changed.profile_changed);
+    assert!(!changed.divergences.is_empty(), "a changed OSC gain went unnoticed");
+    let _ = std::fs::remove_dir_all(&dir);
 }

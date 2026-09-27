@@ -15,7 +15,9 @@ mod app;
 mod assemble;
 mod config;
 mod effects;
+mod policy;
 mod record;
+mod replay;
 mod rigid;
 mod supervisor;
 #[cfg(test)]
@@ -67,6 +69,9 @@ enum Cmd {
         /// Record to CSV.
         #[arg(long)]
         record: Option<PathBuf>,
+        /// Write a binary run log for bit-exact replay (`manip replay`).
+        #[arg(long)]
+        log: Option<PathBuf>,
         /// Circle radius [m] and frequency [Hz] (`--source circle`).
         #[arg(long, default_value_t = 0.05)]
         radius: f64,
@@ -82,6 +87,17 @@ enum Cmd {
         /// Override `[sim.effects] jitter_probability`.
         #[arg(long)]
         jitter: Option<f64>,
+    },
+    /// Re-run a binary run log through the current code and compare every
+    /// command bit for bit. Exits non-zero if anything diverged.
+    Replay {
+        log: PathBuf,
+        /// Use this profile instead of the one recorded in the log.
+        #[arg(long)]
+        robot: Option<PathBuf>,
+        /// Maximum number of divergences to print.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
     /// Only display leader values (does not move the follower).
     Leader {
@@ -116,15 +132,18 @@ enum SourceKind {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    if let Err(e) = real_main() {
+    let cli = Cli::parse();
+    // Replay re-runs every mode transition; keep its output to the verdict.
+    let level = if matches!(cli.cmd, Cmd::Replay { .. }) { "warn" } else { "info" };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level)).init();
+    if let Err(e) = real_main(cli) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
 }
 
-fn real_main() -> Result<(), String> {
-    match Cli::parse().cmd {
+fn real_main(cli: Cli) -> Result<(), String> {
+    match cli.cmd {
         Cmd::Run {
             robot,
             plant,
@@ -135,6 +154,7 @@ fn real_main() -> Result<(), String> {
             duration,
             fast,
             record,
+            log,
             radius,
             freq,
             ideal,
@@ -173,9 +193,28 @@ fn real_main() -> Result<(), String> {
                     duration_s: duration,
                     fast,
                     record,
+                    log: log.map(|l| (l, robot.clone())),
                     status_every_s: 1.0,
                 },
             )
+        }
+        Cmd::Replay { log, robot, limit } => {
+            let (header, frames) = replay::read_log(&log)?;
+            let (profile, text, arm) = replay::load_for_replay(&header, robot.as_deref())?;
+            let r = replay::replay(&header, &frames, &profile, &text, &arm, limit)?;
+            if r.profile_changed {
+                eprintln!("note: the profile differs from the one recorded in the log");
+            }
+            if r.divergences.is_empty() {
+                println!("{} frames: identical", r.frames);
+                Ok(())
+            } else {
+                for d in &r.divergences {
+                    let name = header.axes.get(d.axis.index()).map(String::as_str).unwrap_or("?");
+                    println!("seq {:>7} {:<14} {:<16} recorded {:+.9e} replayed {:+.9e}", d.seq, name, d.field, d.left, d.right);
+                }
+                Err(format!("{} frames: diverged (first at seq {})", r.frames, r.divergences[0].seq))
+            }
         }
         Cmd::Leader { leader, duration, zero } => {
             if zero {
