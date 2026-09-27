@@ -1,0 +1,29 @@
+name: CI
+
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Warning-zero policy (same as misarta): any rustc warning is a regression.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # serialport (CAN adapters over serial, the FashionStar leader) links libudev.
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # MuJoCo is not installed here, so manip-plant-mujoco (outside the
+      # workspace, `--features sim`) is not built. The rigid-body plant covers
+      # the closed loop, the hardware effects and replay in the tests.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
+      # Release: the closed-loop tests integrate the arm dynamics at 2 kHz.
+      - name: Test
+        run: cargo test --workspace --release --locked
