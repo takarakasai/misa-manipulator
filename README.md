@@ -99,6 +99,10 @@ manip run --robot robots/rebot_b601_dm.toml --plant can --source leader --leader
 # 記録（CSV: 関節ごとの q, v, qref, vref, τ と TCP）
 manip run ... --record logs/run.csv
 
+# 3D 表示（MuJoCo のビューア、--features sim のビルドで）。シム・剛体・仮想 CAN・実機の
+# どれでも、観測した関節角で表示用のモデルを動かす
+manip run --robot robots/rebot_b601_dm.toml --plant virtual-can --source sine --start-pose ready --viewer
+
 # 実行ログ（バイナリ）と再生。記録した観測・モード要求・目標をいまのコードに
 # 通し直し、指令が 1 bit でも変われば報告して非 0 で終わる（改修の回帰確認用）
 manip run ... --log logs/run.mrec

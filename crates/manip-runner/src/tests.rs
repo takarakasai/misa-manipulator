@@ -137,6 +137,7 @@ fn rigid_closed_loop_runs_to_done() {
                 record: None,
                 log: None,
                 status_every_s: 1e9,
+                monitor: None,
             },
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -195,6 +196,7 @@ fn replay_is_bit_exact_and_catches_changes() {
             record: None,
             log: Some((log.clone(), profile_path.clone())),
             status_every_s: 1e9,
+            monitor: None,
         },
     )
     .unwrap();
@@ -266,6 +268,7 @@ fn osc_run_with(edit: impl Fn(String) -> String, source: &str, tag: &str) -> (f6
             record: Some(csv.clone()),
             log: None,
             status_every_s: 1e9,
+            monitor: None,
         },
     )
     .unwrap();
@@ -361,6 +364,7 @@ fn virtual_can_arm_runs_the_hardware_path() {
                 record: Some(csv.clone()),
                 log: None,
                 status_every_s: 1e9,
+                monitor: None,
             },
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -531,6 +535,7 @@ fn run_rigid_csv(
             record: Some(csv.clone()),
             log: None,
             status_every_s: 1e9,
+            monitor: None,
         },
     )
     .unwrap();

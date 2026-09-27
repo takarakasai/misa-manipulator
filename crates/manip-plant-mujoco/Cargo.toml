@@ -19,6 +19,9 @@ authors = ["Takara Kasai <takara.kasai@gmail.com>"]
 misa-core = { git = "https://github.com/takarakasai/misa-runner.git", package = "misa-core" }
 articara = { git = "https://github.com/takarakasai/articara.git", default-features = false, features = ["mujoco"] }
 log = "0.4"
+# The passive viewer (viewer.rs). Same version as articara pulls, so the
+# feature just adds to it.
+mujoco = { package = "mujoco-rs", version = "4.0.1", features = ["viewer"] }
 
 [dev-dependencies]
 manip-model = { path = "../manip-model" }

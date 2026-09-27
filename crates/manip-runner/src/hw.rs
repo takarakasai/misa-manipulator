@@ -388,6 +388,7 @@ pub fn friction_sweep(
             record: Some(csv.to_path_buf()),
             log: None,
             status_every_s: 2.0,
+            monitor: None,
         },
     )?;
     let v_min = 0.8 * o.speeds.iter().cloned().fold(f64::INFINITY, f64::min);

@@ -182,6 +182,23 @@ pub struct RunOptions {
     pub log: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// Status display interval [s].
     pub status_every_s: f64,
+    /// Publish the measured pose for a viewer: every cycle the values of
+    /// [`viewer_joints`] (full model joints, mimic followers included) are
+    /// written here; the viewer takes the latest.
+    pub monitor: Option<std::sync::Arc<std::sync::Mutex<Option<Vec<f64>>>>>,
+}
+
+/// Model joints a viewer poses, with their index in the full `q`: every
+/// 1-DOF joint, mimic followers included (so the gripper's second finger moves).
+pub fn viewer_joints(arm: &ArmModel) -> Vec<(String, usize)> {
+    let m = arm.raw();
+    m.joints
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, j)| j.joint_type.nq() == 1)
+        .map(|(i, j)| (j.name.clone(), m.q_idx[i]))
+        .collect()
 }
 
 pub fn run(
@@ -271,6 +288,7 @@ pub fn run(
         });
     }
 
+    let view = viewer_joints(arm);
     plant.arm()?;
     let t0 = Instant::now();
     let mut t = 0.0;
@@ -358,6 +376,11 @@ pub fn run(
 
         if let Err(e) = plant.exchange(&cmd, &mut obs) {
             break Err(e);
+        }
+        if let Some(m) = &opts.monitor {
+            let q: Vec<f64> = obs.axes().iter().map(|a| a.position_rad).collect();
+            let full = arm.full_q(&q);
+            *m.lock().unwrap() = Some(view.iter().map(|&(_, i)| full[i]).collect());
         }
         if obs.axes().iter().any(|a| !a.position_rad.is_finite()) {
             break Err("NaN in observation".into());

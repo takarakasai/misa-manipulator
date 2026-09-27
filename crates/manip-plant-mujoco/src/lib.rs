@@ -29,6 +29,8 @@
 //! CAN round-trip latency, bus jitter, friction, backlash, dropped receptions.
 //! Passing here does not mean the hardware will work (same caveat as misa-runner).
 
+pub mod viewer;
+
 use std::time::Duration;
 
 use articara::mjcf::MjcfExportOptions;

@@ -90,6 +90,11 @@ enum Cmd {
         /// Override `[sim.effects] jitter_probability`.
         #[arg(long)]
         jitter: Option<f64>,
+        /// Show the arm live in MuJoCo's viewer (needs `--features sim`).
+        /// Works with every plant: it poses a display model from the measured
+        /// joint angles.
+        #[arg(long)]
+        viewer: bool,
     },
     /// Re-run a binary run log through the current code and compare every
     /// command bit for bit. Exits non-zero if anything diverged.
@@ -234,6 +239,7 @@ fn real_main(cli: Cli) -> Result<(), String> {
             ideal,
             delay_ticks,
             jitter,
+            viewer,
         } => {
             let (profile, dir) = RobotProfile::load(&robot)?;
             let arm = assemble::load_arm(&profile, &dir)?;
@@ -252,27 +258,42 @@ fn real_main(cli: Cli) -> Result<(), String> {
             // Effects wrap only the physics sims; virtual-can already has the
             // real bus-thread timing.
             let simulated = matches!(plant, PlantKind::Sim | PlantKind::Rigid);
-            let mut plant = make_plant(plant, &profile, &dir, &arm)?;
-            if simulated && !ideal {
-                plant = wrap_effects(plant, &profile, &arm, delay_ticks, jitter)?;
-            } else if !simulated && (delay_ticks.is_some() || jitter.is_some()) {
+            if !simulated && (delay_ticks.is_some() || jitter.is_some()) {
                 return Err("--delay-ticks / --jitter only apply to simulated plants".into());
             }
-            app::run(
-                &profile,
-                &arm,
-                plant.as_mut(),
-                src,
-                RunOptions {
-                    mode,
-                    start_pose,
-                    duration_s: duration,
-                    fast,
-                    record,
-                    log: log.map(|l| (l, robot.clone())),
-                    status_every_s: 1.0,
-                },
-            )
+            let log_opt = log.map(|l| (l, robot.clone()));
+            let misa_path = dir.join(&profile.robot.model);
+            let view_names: Vec<String> = app::viewer_joints(&arm).into_iter().map(|(n, _)| n).collect();
+            // Everything the control loop needs, owned, so it can move to a
+            // worker thread when the viewer takes the main one. The plant is
+            // built inside (a MuJoCo sim cannot cross threads).
+            let run = move |monitor| -> Result<(), String> {
+                let mut plant = make_plant(plant, &profile, &dir, &arm)?;
+                if simulated && !ideal {
+                    plant = wrap_effects(plant, &profile, &arm, delay_ticks, jitter)?;
+                }
+                app::run(
+                    &profile,
+                    &arm,
+                    plant.as_mut(),
+                    src,
+                    RunOptions {
+                        mode,
+                        start_pose,
+                        duration_s: duration,
+                        fast,
+                        record,
+                        log: log_opt,
+                        status_every_s: 1.0,
+                        monitor,
+                    },
+                )
+            };
+            if viewer {
+                run_with_viewer(run, &misa_path, view_names)
+            } else {
+                run(None)
+            }
         }
         Cmd::Hw { robot, plant, cmd } => {
             if !matches!(plant, PlantKind::Can | PlantKind::VirtualCan) && !matches!(cmd, HwCmd::Friction { .. }) {
@@ -347,6 +368,7 @@ fn real_main(cli: Cli) -> Result<(), String> {
                             record: None,
                             log: None,
                             status_every_s: 0.5,
+                            monitor: None,
                         },
                     )
                 }
@@ -561,6 +583,48 @@ fn make_plant(
             )?))
         }
     }
+}
+
+/// Run the control loop on a worker thread and MuJoCo's viewer on this (main)
+/// thread, which winit requires for its event loop.
+#[cfg(feature = "sim")]
+fn run_with_viewer(
+    run: impl FnOnce(Option<std::sync::Arc<std::sync::Mutex<Option<Vec<f64>>>>>) -> Result<(), String> + Send + 'static,
+    misa_path: &std::path::Path,
+    names: Vec<String>,
+) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let slot = Arc::new(Mutex::new(None));
+    let done = Arc::new(AtomicBool::new(false));
+    let (slot2, done2) = (slot.clone(), done.clone());
+    let worker = std::thread::Builder::new()
+        .name("control".into())
+        .spawn(move || {
+            let r = run(Some(slot2));
+            done2.store(true, Ordering::Relaxed);
+            r
+        })
+        .map_err(|e| e.to_string())?;
+    let title = format!("manip — {}", misa_path.file_stem().and_then(|s| s.to_str()).unwrap_or("arm"));
+    let shown = manip_plant_mujoco::viewer::run_viewer(&misa_path.display().to_string(), &names, slot, &done, &title);
+    if let Err(e) = &shown {
+        // The control loop keeps running without a view (no display, GL failure).
+        log::warn!("{e}; continuing without the viewer");
+        while !done.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    worker.join().map_err(|_| "control thread panicked".to_string())?
+}
+
+#[cfg(not(feature = "sim"))]
+fn run_with_viewer(
+    _run: impl FnOnce(Option<std::sync::Arc<std::sync::Mutex<Option<Vec<f64>>>>>) -> Result<(), String>,
+    _misa_path: &std::path::Path,
+    _names: Vec<String>,
+) -> Result<(), String> {
+    Err("--viewer needs a build with --features sim (MuJoCo)".into())
 }
 
 /// Wrap a simulated plant in `[sim.effects]` (latency, jitter, quantization).
