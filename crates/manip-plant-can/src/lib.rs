@@ -313,6 +313,35 @@ impl Plant for CanArmPlant {
     }
 }
 
+/// Feedback resolution of one motor, in **model** units: `[position, velocity,
+/// torque]` per LSB of the MIT status frame.
+///
+/// Derived from the vendor protocol tables, so a simulator can quantize its
+/// observations exactly as the real bus would. DAMIAO packs position in 16 bits
+/// and velocity / torque in 12 bits over `±{P,V,T}MAX`; RobStride packs all
+/// three in 16 bits over its per-model MIT scales. The 12-bit DAMIAO velocity
+/// is the coarse one: 0.015 rad/s per LSB on a DM4310 (±30 rad/s).
+pub fn feedback_resolution(vendor: Vendor, m: &MotorSpec) -> Result<[f64; 3], String> {
+    let [p, v, t, bits_vt] = match vendor {
+        Vendor::Damiao => {
+            let model = damiao_driver::MotorModel::from_name(&m.model)
+                .ok_or_else(|| format!("unknown DAMIAO model: {}", m.model))?;
+            let l = model.limits();
+            [l.p_max as f64, l.v_max as f64, l.t_max as f64, 12.0]
+        }
+        Vendor::Robstride => {
+            let model = robstride_driver::MotorModel::from_name(&m.model)
+                .ok_or_else(|| format!("unknown RobStride model: {}", m.model))?;
+            let s = robstride_driver::protocol::MitScales::for_model(model);
+            [s.position as f64, s.velocity as f64, s.torque as f64, 16.0]
+        }
+    };
+    let lsb = |half: f64, bits: f64| 2.0 * half / (2f64.powf(bits) - 1.0);
+    // Motor units -> model units: q = zero + sign*ratio*q_m, tau = sign*tau_m/ratio.
+    let r = m.ratio.abs();
+    Ok([lsb(p, 16.0) * r, lsb(v, bits_vt) * r, lsb(t, bits_vt) / r])
+}
+
 type Motor = Box<dyn Actuator + Send>;
 
 fn open_bus(spec: &BusSpec) -> Result<Vec<Motor>, String> {
@@ -456,5 +485,39 @@ impl Drop for CanArmPlant {
                 let _ = h.join();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(model: &str, ratio: f64) -> MotorSpec {
+        MotorSpec {
+            joint: "j".into(),
+            id: 1,
+            host_id: None,
+            model: model.into(),
+            sign: 1.0,
+            zero: 0.0,
+            ratio,
+        }
+    }
+
+    #[test]
+    fn resolution_matches_protocol_tables() {
+        // DM4310: ±12.5 rad / 16 bit, ±30 rad/s / 12 bit.
+        let [p, v, _] = feedback_resolution(Vendor::Damiao, &spec("dm4310", 1.0)).unwrap();
+        assert!((p - 25.0 / 65535.0).abs() < 1e-9);
+        assert!((v - 60.0 / 4095.0).abs() < 1e-6);
+        // Gripper through a 0.00605 m/rad rack: position step shrinks by the ratio,
+        // force step grows by 1/ratio.
+        let [pg, _, tg] = feedback_resolution(Vendor::Damiao, &spec("dm4310", 0.00605)).unwrap();
+        assert!((pg - p * 0.00605).abs() < 1e-12);
+        let [_, _, t] = feedback_resolution(Vendor::Damiao, &spec("dm4310", 1.0)).unwrap();
+        assert!((tg - t / 0.00605).abs() < 1e-9);
+        // RobStride: 16 bits on all three.
+        let [p, v, t] = feedback_resolution(Vendor::Robstride, &spec("rs-00", 1.0)).unwrap();
+        assert!(p > 0.0 && v < 0.01 && t < 0.01);
     }
 }

@@ -51,6 +51,11 @@ pub struct SimAxis {
     pub damping: f64,
     /// Torque limit [N·m]. No limit if 0 or less.
     pub effort: f64,
+    /// Coulomb friction [N·m] ([N] for prismatic), applied as
+    /// `-friction * tanh(v / friction_v_eps)` on every physics step. Gearbox
+    /// friction does not go away when the motor is limp, so it acts while
+    /// disarmed too.
+    pub friction: f64,
 }
 
 /// A mimic-dependent joint.
@@ -87,6 +92,12 @@ pub struct SimOptions {
     /// the joints back (the closed fingers opened by 0.03 m and the holding PD fought
     /// it with thousands of N). To check self-collision, fix the collision meshes first.
     pub self_collision: bool,
+    /// Velocity [rad/s] over which Coulomb friction ramps up (tanh smoothing).
+    ///
+    /// A true sign() would chatter at the explicit physics step; the slope
+    /// `friction / friction_v_eps` acts like a damper near zero speed, so keep
+    /// it below `2·I/dt` for the lightest joint.
+    pub friction_v_eps: f64,
 }
 
 pub struct MujocoArmPlant {
@@ -98,6 +109,7 @@ pub struct MujocoArmPlant {
     /// Joint index of `axes[i]` in the RobotModel.
     axis_joint: Vec<usize>,
     mimics: Vec<(usize, usize, SimMimic)>,
+    friction_v_eps: f64,
     substeps: u32,
     armed: bool,
     time: Duration,
@@ -214,6 +226,7 @@ impl MujocoArmPlant {
             axes: opts.axes,
             axis_joint,
             mimics,
+            friction_v_eps: opts.friction_v_eps.max(1e-4),
             substeps,
             armed: false,
             time: Duration::ZERO,
@@ -325,7 +338,10 @@ impl Plant for MujocoArmPlant {
                 let e = self.axes[i].effort;
                 let tau = if e > 0.0 { tau.clamp(-e, e) } else { tau };
                 self.last_tau[i] = tau;
-                self.tau_buf[ji] = tau;
+                // Friction is on the joint side, outside the motor's torque limit.
+                let fc = self.axes[i].friction;
+                let friction = if fc > 0.0 { -fc * (v / self.friction_v_eps).tanh() } else { 0.0 };
+                self.tau_buf[ji] = tau + friction;
             }
             // Dependent joints: stiff PD toward the leader (rack-and-pinion approximation).
             // Stays active while limp (it is a mechanical coupling, independent of power).

@@ -182,3 +182,23 @@ impl TeleopMapping {
         )
     }
 }
+
+/// Per-DOF feedback LSB `[position, velocity, torque]` in model units, from the
+/// motor models in `[hardware]` (so the simulator quantizes exactly like the
+/// real MIT status frames).
+pub fn feedback_quantization(p: &RobotProfile, arm: &ArmModel) -> Result<Vec<[f64; 3]>, String> {
+    let hw = p
+        .hardware
+        .as_ref()
+        .ok_or("[sim.effects] quantize = true needs [hardware] to know the motor models")?;
+    arm.dofs()
+        .iter()
+        .map(|d| {
+            hw.bus
+                .iter()
+                .find_map(|b| b.motor.iter().find(|m| m.joint == d.name).map(|m| (b.vendor, m)))
+                .ok_or_else(|| format!("no motor in [hardware] for joint {}", d.name))
+                .and_then(|(v, m)| manip_plant_can::feedback_resolution(v, m))
+        })
+        .collect()
+}

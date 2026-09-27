@@ -71,7 +71,9 @@ cargo build --release -p manip-runner --features sim
 manip run --robot robots/rebot_b601_dm.toml --plant sim --source sine --mode joint --duration 20
 # シム: TCP で円を描く（OSC）。畳んだ姿勢は可動域の端なので ready へ運んでから
 manip run --robot robots/rebot_b601_dm.toml --plant sim --source circle --mode osc --start-pose ready
-# MuJoCo が無い環境: --plant rigid（接触・摩擦なしの剛体積分）
+# シムは既定で実機の「悪さ」（遅延・ジッタ・量子化・摩擦）を掛ける。
+# --ideal で外す、--delay-ticks / --jitter で上書き。掃引は scripts/sweep_effects.py
+# MuJoCo が無い環境: --plant rigid（接触なしの剛体積分、摩擦と悪さは同じく掛かる）
 manip run --robot robots/rebot_b601_rs.toml --plant rigid --source sine --duration 10 --fast
 
 # リーダーの値を見る / ゼロ姿勢のオフセットを読む（サーボには書かない）

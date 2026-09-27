@@ -7,3 +7,5 @@
 /ref/
 # Recordings (CSV / postcard). Large, so not tracked.
 /logs/
+# Python bytecode from scripts/.
+__pycache__/

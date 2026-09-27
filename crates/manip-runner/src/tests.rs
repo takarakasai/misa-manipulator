@@ -8,6 +8,7 @@ use nalgebra::DVector;
 use crate::app::{self, RunOptions, Source};
 use crate::assemble::{self, TeleopMapping};
 use crate::config::RobotProfile;
+use crate::effects::{Effects, EffectsPlant};
 use crate::rigid::RigidPlant;
 use crate::supervisor::Mode;
 
@@ -70,16 +71,48 @@ fn leader_maps_dm_and_rs_to_the_same_physical_pose() {
     }
 }
 
-/// With the rigid Plant, "startup -> start pose -> tracking -> Park -> release" completes.
+/// With the rigid Plant, "startup -> start pose -> tracking -> Park -> release"
+/// completes, both ideal and with the hardware effects of `[sim.effects]`
+/// (latency, jitter, MIT feedback quantization, friction).
 #[test]
 fn rigid_closed_loop_runs_to_done() {
-    for (name, source, mode) in [
-        ("rebot_b601_dm", "sine", Mode::Joint),
-        ("rebot_b601_rs", "circle", Mode::Osc),
+    for (name, source, mode, with_effects) in [
+        ("rebot_b601_dm", "sine", Mode::Joint, false),
+        ("rebot_b601_rs", "circle", Mode::Osc, false),
+        ("rebot_b601_dm", "sine", Mode::Joint, true),
+        ("rebot_b601_dm", "circle", Mode::Osc, true),
     ] {
         let (p, arm) = robot(name);
         let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
-        let mut plant = RigidPlant::new(arm.clone(), q0, 1.0 / p.control.rate_hz, p.sim.timestep_s).unwrap();
+        let friction = assemble::joints_in_order(&p, &arm)
+            .iter()
+            .map(|j| (j.sim_friction, j.sim_damping))
+            .collect();
+        let rigid = RigidPlant::new(
+            arm.clone(),
+            q0,
+            1.0 / p.control.rate_hz,
+            p.sim.timestep_s,
+            friction,
+            p.sim.friction_v_eps,
+        )
+        .unwrap();
+        let mut plant: Box<dyn misa_core::Plant> = if with_effects {
+            let fx = p.sim.effects.as_ref().expect("profile has [sim.effects]");
+            Box::new(EffectsPlant::new(
+                Box::new(rigid),
+                Effects {
+                    command_delay_ticks: fx.command_delay_ticks,
+                    observation_delay_ticks: fx.observation_delay_ticks,
+                    jitter_probability: fx.jitter_probability,
+                    quantization: Some(assemble::feedback_quantization(&p, &arm).unwrap()),
+                    seed: fx.seed,
+                    period: std::time::Duration::from_secs_f64(1.0 / p.control.rate_hz),
+                },
+            ))
+        } else {
+            Box::new(rigid)
+        };
         let src = match source {
             "sine" => Source::Sine {
                 leader: manip_leader::synthetic::SineLeader::new(p.sine.clone()),
@@ -94,7 +127,7 @@ fn rigid_closed_loop_runs_to_done() {
         app::run(
             &p,
             &arm,
-            &mut plant,
+            plant.as_mut(),
             src,
             RunOptions {
                 mode,

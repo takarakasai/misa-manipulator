@@ -25,10 +25,24 @@ pub struct RigidPlant {
     h: f64,
     armed: bool,
     time: Duration,
+    friction: Vec<(f64, f64)>,
+    friction_v_eps: f64,
 }
 
 impl RigidPlant {
-    pub fn new(arm: ArmModel, q0: DVector<f64>, control_period_s: f64, timestep_s: f64) -> Result<Self, String> {
+    /// `friction` is per axis `(coulomb, viscous)`; `friction_v_eps` is the tanh
+    /// smoothing velocity for the Coulomb part (see manip-plant-mujoco).
+    pub fn new(
+        arm: ArmModel,
+        q0: DVector<f64>,
+        control_period_s: f64,
+        timestep_s: f64,
+        friction: Vec<(f64, f64)>,
+        friction_v_eps: f64,
+    ) -> Result<Self, String> {
+        if friction.len() != arm.n() {
+            return Err(format!("friction table has {} entries, arm has {} DOFs", friction.len(), arm.n()));
+        }
         let n = arm.n();
         let table = AxisTable::new(
             arm.dofs()
@@ -55,8 +69,22 @@ impl RigidPlant {
             h: control_period_s / substeps as f64,
             armed: false,
             time: Duration::ZERO,
+            friction,
+            friction_v_eps: friction_v_eps.max(1e-4),
             arm,
         })
+    }
+}
+
+impl RigidPlant {
+    /// Joint-side friction torque at the current velocity.
+    fn joint_friction(&self) -> DVector<f64> {
+        DVector::from_iterator(
+            self.v.len(),
+            self.v.iter().zip(&self.friction).map(|(&v, &(fc, fv))| {
+                -fc * (v / self.friction_v_eps).tanh() - fv * v
+            }),
+        )
     }
 }
 
@@ -105,7 +133,7 @@ impl Plant for RigidPlant {
                     .clone()
                     .cholesky()
                     .ok_or("mass matrix is not positive definite (check armature)")?
-                    .solve(&(&self.tau - &s.nle));
+                    .solve(&(&self.tau + self.joint_friction() - &s.nle));
                 self.v += qdd * self.h;
                 self.q += &self.v * self.h;
                 // Range of motion: in place of a mechanical stop, stop the position and

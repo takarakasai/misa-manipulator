@@ -126,10 +126,13 @@ pub struct JointSection {
     /// Gravity term scale (an escape hatch for model-vs-hardware mismatch).
     #[serde(default = "one")]
     pub gravity_scale: f64,
-    /// Joint damping in the sim.
+    /// Joint damping in the sim [N·m·s/rad].
     #[serde(default)]
-    #[cfg_attr(not(feature = "sim"), allow(dead_code))]
     pub sim_damping: f64,
+    /// Coulomb friction in the sim [N·m] ([N] for prismatic). An estimate until
+    /// identified on hardware (misa-sysid).
+    #[serde(default)]
+    pub sim_friction: f64,
 }
 
 fn one() -> f64 {
@@ -235,6 +238,44 @@ pub struct SimSection {
     /// Link-link contact (off by default; see SimOptions in manip-plant-mujoco).
     #[serde(default)]
     pub self_collision: bool,
+    /// Velocity [rad/s] over which Coulomb friction ramps up (tanh smoothing).
+    #[serde(default = "default_friction_v_eps")]
+    pub friction_v_eps: f64,
+    /// Hardware non-idealities added around the simulated plant. Absent = ideal.
+    #[serde(default)]
+    pub effects: Option<EffectsSection>,
+}
+
+fn default_friction_v_eps() -> f64 {
+    0.05
+}
+
+/// `[sim.effects]`: what the CAN arm does that the simulator does not
+/// (see `effects.rs`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectsSection {
+    /// Ticks between issuing a command and the plant applying it.
+    #[serde(default = "one_usize")]
+    pub command_delay_ticks: usize,
+    /// Extra ticks by which observations are older than the plant state.
+    #[serde(default)]
+    pub observation_delay_ticks: usize,
+    /// Probability of one extra tick of command delay (missed bus cycle).
+    #[serde(default)]
+    pub jitter_probability: f64,
+    /// Quantize feedback like the MIT status frame of the motors in `[hardware]`.
+    #[serde(default = "yes")]
+    pub quantize: bool,
+    #[serde(default = "one_u64")]
+    pub seed: u64,
+}
+
+fn one_usize() -> usize {
+    1
+}
+fn one_u64() -> u64 {
+    1
 }
 
 impl Default for SimSection {

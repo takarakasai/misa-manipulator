@@ -14,6 +14,7 @@
 mod app;
 mod assemble;
 mod config;
+mod effects;
 mod record;
 mod rigid;
 mod supervisor;
@@ -71,6 +72,16 @@ enum Cmd {
         radius: f64,
         #[arg(long, default_value_t = 0.25)]
         freq: f64,
+        /// Run the simulated plant ideal: ignore `[sim.effects]` (no latency,
+        /// jitter or quantization).
+        #[arg(long)]
+        ideal: bool,
+        /// Override `[sim.effects] command_delay_ticks`.
+        #[arg(long)]
+        delay_ticks: Option<usize>,
+        /// Override `[sim.effects] jitter_probability`.
+        #[arg(long)]
+        jitter: Option<f64>,
     },
     /// Only display leader values (does not move the follower).
     Leader {
@@ -126,6 +137,9 @@ fn real_main() -> Result<(), String> {
             record,
             radius,
             freq,
+            ideal,
+            delay_ticks,
+            jitter,
         } => {
             let (profile, dir) = RobotProfile::load(&robot)?;
             let arm = assemble::load_arm(&profile, &dir)?;
@@ -141,7 +155,13 @@ fn real_main() -> Result<(), String> {
                 None => None,
             };
             let src = make_source(&profile, &arm, source, leader.as_deref(), radius, freq)?;
+            let simulated = plant != PlantKind::Can;
             let mut plant = make_plant(plant, &profile, &dir, &arm)?;
+            if simulated && !ideal {
+                plant = wrap_effects(plant, &profile, &arm, delay_ticks, jitter)?;
+            } else if !simulated && (delay_ticks.is_some() || jitter.is_some()) {
+                return Err("--delay-ticks / --jitter only apply to simulated plants".into());
+            }
             app::run(
                 &profile,
                 &arm,
@@ -304,14 +324,62 @@ fn make_plant(
                     .ok_or_else(|| format!("[sim] initial_pose = \"{name}\" not found"))?,
                 None => nalgebra::DVector::zeros(arm.n()),
             };
+            let friction = assemble::joints_in_order(profile, arm)
+                .iter()
+                .map(|j| (j.sim_friction, j.sim_damping))
+                .collect();
             Ok(Box::new(rigid::RigidPlant::new(
                 arm.clone(),
                 q0,
                 1.0 / profile.control.rate_hz,
                 profile.sim.timestep_s,
+                friction,
+                profile.sim.friction_v_eps,
             )?))
         }
     }
+}
+
+/// Wrap a simulated plant in `[sim.effects]` (latency, jitter, quantization).
+/// Without `[sim.effects]` the plant stays ideal unless the CLI asks for delay.
+fn wrap_effects(
+    plant: Box<dyn Plant>,
+    profile: &RobotProfile,
+    arm: &manip_model::ArmModel,
+    delay_ticks: Option<usize>,
+    jitter: Option<f64>,
+) -> Result<Box<dyn Plant>, String> {
+    let fx = match (&profile.sim.effects, delay_ticks, jitter) {
+        (None, None, None) => return Ok(plant),
+        (cfg, _, _) => cfg.clone().unwrap_or(config::EffectsSection {
+            command_delay_ticks: 0,
+            observation_delay_ticks: 0,
+            jitter_probability: 0.0,
+            quantize: false,
+            seed: 1,
+        }),
+    };
+    let quantization = if fx.quantize {
+        Some(assemble::feedback_quantization(profile, arm)?)
+    } else {
+        None
+    };
+    let e = effects::Effects {
+        command_delay_ticks: delay_ticks.unwrap_or(fx.command_delay_ticks),
+        observation_delay_ticks: fx.observation_delay_ticks,
+        jitter_probability: jitter.unwrap_or(fx.jitter_probability),
+        quantization,
+        seed: fx.seed,
+        period: Duration::from_secs_f64(1.0 / profile.control.rate_hz),
+    };
+    log::info!(
+        "sim effects: command delay {} tick, observation delay {} tick, jitter {:.0}%, quantized {}",
+        e.command_delay_ticks,
+        e.observation_delay_ticks,
+        e.jitter_probability * 100.0,
+        e.quantization.is_some()
+    );
+    Ok(Box::new(effects::EffectsPlant::new(plant, e)))
 }
 
 #[cfg(feature = "sim")]
@@ -356,6 +424,7 @@ fn make_sim(
                 armature: d.armature,
                 damping: j.sim_damping,
                 effort: if d.effort.is_finite() { d.effort } else { 0.0 },
+                friction: j.sim_friction,
             })
             .collect(),
         mimics,
@@ -366,6 +435,7 @@ fn make_sim(
         ground: profile.sim.ground,
         joint_limits: profile.sim.joint_limits,
         self_collision: profile.sim.self_collision,
+        friction_v_eps: profile.sim.friction_v_eps,
     })?;
     Ok(Box::new(p))
 }
