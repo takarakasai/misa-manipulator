@@ -180,24 +180,31 @@ RS も同様（OSC 5.54 → 1.53 mm）。
 ## 5. 実機の立ち上げ手順（案、未実施）
 
 **電源はすぐ切れるようにしておく。** DAMIAO は disable 後も次のフレームで再通電
-しうる（misa-actuator の handover §2）。
+しうる（misa-actuator の handover §2）。各手順は `--plant virtual-can` で**先に
+リハーサルできる**（仮想の腕、実機と同じ経路）。
 
 1. CAN: `sudo ip link set can0 type can bitrate 1000000 && sudo ip link set can0 up`。
-   `damiao-cli scan` / `robstride-cli scan` で ID 1–7 が見えること（DM の Master ID は
-   ID + 0x10、RS の host は 0xFD）。
+   ID は DM が 1–7（Master ID = ID + 0x10）、RS が 1–7（host 0xFD）。
 2. ゼロ点: Seeed の手順（LeRobot `lerobot-calibrate`、畳んだ姿勢・グリッパ閉）で
-   済ませてあれば、`[hardware]` の `zero = 0`。**`manip` はゼロを書かない。**
-3. 読むだけ: 腕を手で支えて `manip run --plant can --mode gravity --duration 5`。
-   起動時に初期姿勢が表示される。畳んだ姿勢で全軸 ≈ 0 か、可動域チェックで
-   止められないかを見る。
-4. 重力補償: そのまま手を離して落ちないこと（落ちるなら `gravity_scale`・
-   `armature`・モデルの質量を疑う。符号が逆なら加速して落ちる）。
-5. 保持 → 関節の追従: `--mode hold`、次に `--source sine --mode joint`
-   （`[[sine]]` の振幅を小さくしてから）。
-6. リーダー: `manip leader --leader leaders/stararm102.toml` で 1 軸ずつ動かし、
-   中立空間の符号を確かめる（**upstream の符号が正しいか未確認**）。
+   済ませてあれば `[hardware]` の `zero = 0`。**`manip` はゼロを書かない。**
+3. `manip hw --robot robots/rebot_b601_dm.toml scan` — **通電しない。** 全軸が応答
+   し、畳んだ姿勢でほぼ 0° かつ可動域内（`ok`）であること。`NO REPLY` は ID・配線・
+   電源、`OUT OF RANGE` はゼロ点・符号を疑う。最後の行にバスの実効 Hz が出る
+   （500 Hz を割るなら §3 のバスの周期を参照）。
+4. `manip hw ... sign` — **通電しない。** 軸ごとに「手先が +z へ動くように」などの
+   案内（モデルのヤコビアンから出す）に従って手で回す。`REVERSED` の軸は
+   `[hardware]` のその motor の `sign` を反転する。
+5. `manip hw ... jog --joint joint2 --delta 5` — 通電して保持し、1 軸だけ 5° 往復して
+   から畳んで脱力する。腕の近くに人を置かないこと。
+6. 重力補償: 腕を手で支えて `manip run --plant can --mode gravity --duration 10`。
+   手を離して落ちないこと（落ちるなら `gravity_scale`・`armature`・モデルの質量、
+   加速して落ちるなら符号）。
+7. 保持 → 関節の追従: `--mode hold`、次に `--source sine --mode joint`
+   （`[[sine]]` の振幅を小さくしてから）。`--log` を付けて記録を残す。
+8. リーダー: `manip leader --leader leaders/stararm102.toml` で 1 軸ずつ動かし、
+   中立空間の符号を確かめる（upstream の符号が正しいか未確認）。
    シムのフォロワーで `--source leader` → 実機。
-7. グリッパの `ratio`（m/rad）を実測で直す（開閉の端で指の変位を測る）。
+9. 摩擦の同定（misa-sysid）と、グリッパの `ratio`（m/rad）の実測。
 
 ---
 

@@ -15,6 +15,7 @@ mod app;
 mod assemble;
 mod config;
 mod effects;
+mod hw;
 mod policy;
 mod record;
 mod replay;
@@ -100,6 +101,17 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Bring-up: check the arm before trusting the control loop with it
+    /// (scan / monitor / sign never energize the motors).
+    Hw {
+        #[arg(long)]
+        robot: PathBuf,
+        /// `can` for the real arm, `virtual-can` to rehearse without it.
+        #[arg(long, value_enum, default_value_t = PlantKind::Can)]
+        plant: PlantKind,
+        #[command(subcommand)]
+        cmd: HwCmd,
+    },
     /// Only display leader values (does not move the follower).
     Leader {
         #[arg(long)]
@@ -110,6 +122,34 @@ enum Cmd {
         /// (does not write to the servos).
         #[arg(long)]
         zero: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum HwCmd {
+    /// Every motor answers and the pose is inside the range of motion.
+    Scan,
+    /// Live joint angles (model frame) while moving the arm by hand.
+    Monitor {
+        #[arg(long, default_value_t = 30.0)]
+        duration: f64,
+    },
+    /// Per joint, move it by hand as instructed; reports OK / REVERSED signs.
+    Sign {
+        /// Seconds to wait for each joint to move.
+        #[arg(long, default_value_t = 15.0)]
+        timeout: f64,
+    },
+    /// Energize, hold, move one joint by `delta` degrees and back, fold, release.
+    Jog {
+        #[arg(long)]
+        joint: String,
+        /// Degrees (mm for a prismatic joint). Flipped if it would leave the range.
+        #[arg(long, default_value_t = 5.0, allow_hyphen_values = true)]
+        delta: f64,
+        /// Seconds for the out-and-back move.
+        #[arg(long, default_value_t = 3.0)]
+        period: f64,
     },
 }
 
@@ -203,6 +243,56 @@ fn real_main(cli: Cli) -> Result<(), String> {
                     status_every_s: 1.0,
                 },
             )
+        }
+        Cmd::Hw { robot, plant, cmd } => {
+            if !matches!(plant, PlantKind::Can | PlantKind::VirtualCan) {
+                return Err("hw commands run on --plant can or virtual-can".into());
+            }
+            let (profile, dir) = RobotProfile::load(&robot)?;
+            let arm = assemble::load_arm(&profile, &dir)?;
+            let mut p = make_plant(plant, &profile, &dir, &arm)?;
+            match cmd {
+                HwCmd::Scan => {
+                    if hw::scan(p.as_mut(), &arm)? { Ok(()) } else { Err("scan found problems".into()) }
+                }
+                HwCmd::Monitor { duration } => hw::monitor(p.as_mut(), &arm, Duration::from_secs_f64(duration)),
+                HwCmd::Sign { timeout } => {
+                    if hw::sign_check(p.as_mut(), &arm, Duration::from_secs_f64(timeout))? {
+                        Ok(())
+                    } else {
+                        Err("sign check found problems".into())
+                    }
+                }
+                HwCmd::Jog { joint, delta, period } => {
+                    let dof = arm.dof(&joint).map_err(|e| e.to_string())?;
+                    let d = &arm.dofs()[dof];
+                    let mut delta = match d.kind {
+                        manip_model::DofKind::Revolute => delta.to_radians(),
+                        manip_model::DofKind::Prismatic => delta * 1e-3,
+                    };
+                    let q0 = hw::read_passive(p.as_mut(), arm.n(), Duration::from_millis(300))?.axes()[dof].position_rad;
+                    if !d.within(q0 + delta) {
+                        log::warn!("{joint}: {q0:.3} + {delta:.3} leaves the range; jogging the other way");
+                        delta = -delta;
+                    }
+                    let duration = profile.control.startup_ramp_s + period + 1.0;
+                    app::run(
+                        &profile,
+                        &arm,
+                        p.as_mut(),
+                        Source::Jog { dof, delta, period_s: period, start: None },
+                        RunOptions {
+                            mode: Mode::Joint,
+                            start_pose: None,
+                            duration_s: Some(duration),
+                            fast: false,
+                            record: None,
+                            log: None,
+                            status_every_s: 0.5,
+                        },
+                    )
+                }
+            }
         }
         Cmd::Replay { log, robot, limit } => {
             let (header, frames) = replay::read_log(&log)?;

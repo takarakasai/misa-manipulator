@@ -78,6 +78,11 @@ manip run --robot robots/rebot_b601_dm.toml --plant virtual-can --source sine --
 # MuJoCo が無い環境: --plant rigid（接触なしの剛体積分、摩擦と悪さは同じく掛かる）
 manip run --robot robots/rebot_b601_rs.toml --plant rigid --source sine --duration 10 --fast
 
+# 実機の立ち上げ（scan / monitor / sign は通電しない）。--plant virtual-can でリハーサル可
+manip hw --robot robots/rebot_b601_dm.toml scan
+manip hw --robot robots/rebot_b601_dm.toml sign
+manip hw --robot robots/rebot_b601_dm.toml jog --joint joint2 --delta 5
+
 # リーダーの値を見る / ゼロ姿勢のオフセットを読む（サーボには書かない）
 manip leader --leader leaders/stararm102.toml
 manip leader --leader leaders/stararm102.toml --zero

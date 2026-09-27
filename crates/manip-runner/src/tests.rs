@@ -393,3 +393,21 @@ fn virtual_can_arm_runs_the_hardware_path() {
         assert!(rms < 0.03, "{name}: joint tracking rms {rms:.4} rad through the virtual CAN arm");
     }
 }
+
+/// `hw sign` hints come from the Jacobian. DM and RS have mirrored URDF axes,
+/// so at the same physical pose each arm joint's "positive" hint must point
+/// the opposite way.
+#[test]
+fn sign_hints_are_mirrored_between_dm_and_rs() {
+    let (_, dm) = robot("rebot_b601_dm");
+    let (_, rs) = robot("rebot_b601_rs");
+    // Same physical pose: RS angles are the negated DM ones (see teleop maps).
+    let qd = [0.4, -1.2, -1.1, 0.3, 0.5, 0.2, 0.0];
+    let qr: Vec<f64> = qd.iter().enumerate().map(|(i, x)| if i < 6 { -x } else { 0.0 }).collect();
+    let flip = |h: &str| h.replace('+', "?").replace('-', "+").replace('?', "-");
+    for i in 0..6 {
+        let hd = crate::hw::positive_hint(&dm, &qd, i);
+        let hr = crate::hw::positive_hint(&rs, &qr, i);
+        assert_eq!(hr, flip(&hd), "joint{}: DM '{hd}' vs RS '{hr}'", i + 1);
+    }
+}

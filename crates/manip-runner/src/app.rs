@@ -37,6 +37,9 @@ pub enum Source {
     /// Draw a circle with the TCP (for checking OSC). y-z plane; the TCP at start lies
     /// on the circle.
     Circle { radius: f64, freq_hz: f64, start: Option<Isometry3<f64>> },
+    /// Move one joint by `delta` and back (raised cosine over `period_s`),
+    /// then hold where it started. For bring-up (`manip hw jog`).
+    Jog { dof: usize, delta: f64, period_s: f64, start: Option<(f64, DVector<f64>)> },
     Leader {
         thread: LeaderThread,
         mapping: TeleopMapping,
@@ -63,6 +66,14 @@ impl Source {
                 let pose = Isometry3::from_parts(Translation3::from(p0.translation.vector + d), p0.rotation);
                 let _ = arm;
                 Target::Tcp { pose, posture: keep.clone() }
+            }
+            Source::Jog { dof, delta, period_s, start } => {
+                let (t0, q0) = start.get_or_insert_with(|| (t, keep.clone())).clone();
+                let tau = ((t - t0) / *period_s).clamp(0.0, 1.0);
+                let mut q = q0;
+                q[*dof] += *delta * 0.5 * (1.0 - (std::f64::consts::TAU * tau).cos());
+                let _ = arm;
+                Target::Joint(q)
             }
             Source::Leader { thread, mapping, timeout, last_seq } => match thread.latest() {
                 Some(sample) if sample.at.elapsed() <= *timeout => {
