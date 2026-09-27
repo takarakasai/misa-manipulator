@@ -87,9 +87,9 @@ misa-wbc の `cartesian_acceleration_damped` は `‖q̈‖²` を罰するの�
    乗っているがシムは宙に浮いている。MuJoCo Plant は `arm()` まで時間を進めない。
 4. **畳んだ姿勢（ゼロ）は肩・肘がちょうど可動域の上限。** OSC をそこから始めると
    CBF が退化して QP が解けない。`--start-pose ready` で離してから入る。
-5. **misa-core の SafetyGate はトルクの変化率制限を `!=` で判定する。**
-   τ ≈ 0 の軸で丸め誤差（1e-17）だけの差も「制限した」と報告する（値は不変）。
-   manip-runner 側で実際に動いた軸だけ残している。直すなら misa-core。
+5. **misa-core の SafetyGate がトルク・位置の変化率制限を丸め誤差で誤報告していた。**
+   `from + (want − from)` が浮動小数点で `want` に戻らず、τ ≈ 0 の軸で「制限した」と
+   出た（値は不変）。misa-runner `0706607` で修正済み。
 6. **URDF の速度上限は実機より 1 桁大きい**（50 / 200 rad/s）。OSC の速度 CBF が
    効かないので、プロファイルの `v_max` で必ず上書きする（`load_arm` が当てる）。
 

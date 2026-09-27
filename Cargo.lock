@@ -1046,7 +1046,7 @@ dependencies = [
 [[package]]
 name = "misa-core"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
+source = "git+https://github.com/takarakasai/misa-runner.git#0706607a72f281fba16d534511b4d87fa0fcf09d"
 dependencies = [
  "serde",
 ]

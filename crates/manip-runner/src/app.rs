@@ -240,14 +240,7 @@ pub fn run(
             log::info!("{tr}");
         }
         to_command(&jc, &mut cmd);
-        let before: Vec<f64> = cmd.axes().iter().map(|a| a.torque_ff_nm).collect();
-        let mut verdict = gate.apply(&mut cmd, &obs, Duration::from_secs_f64(dt));
-        // misa-core's SafetyGate decides torque-rate limiting by `limited != want`, so
-        // at τ ≈ 0 a mere rounding difference (1e-17) is reported as "limited" (the
-        // value didn't change). Keep only the axes that were actually changed.
-        verdict
-            .torque_rate_limited
-            .retain(|id| (before[id.index()] - cmd.axes()[id.index()].torque_ff_nm).abs() > 1e-9);
+        let verdict = gate.apply(&mut cmd, &obs, Duration::from_secs_f64(dt));
         if !verdict.is_clean() && t - last_gate_log > 1.0 {
             log::warn!("SafetyGate: {verdict:?}");
             last_gate_log = t;
