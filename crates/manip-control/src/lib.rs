@@ -30,12 +30,14 @@
 //! gear ratio are unknown here.
 
 pub mod command;
+pub mod friction;
 pub mod gains;
 pub mod joint;
 pub mod osc;
 pub mod shaper;
 
 pub use command::{AxisCmd, JointCommand};
+pub use friction::FrictionModel;
 pub use gains::JointGains;
 pub use joint::{Feedforward, JointImpedance};
 pub use osc::{Osc, OscConfig, OscError, OscReport, TcpRef};

@@ -35,6 +35,9 @@ pub struct JointImpedance {
     /// differences between model and hardware. Record the reason whenever you
     /// move it away from 1.0.
     pub gravity_scale: DVector<f64>,
+    /// Friction feedforward, evaluated at the **reference** velocity (see
+    /// [`crate::friction`] for why not the measured one). `None` = off.
+    pub friction: Option<crate::friction::FrictionModel>,
 }
 
 impl JointImpedance {
@@ -44,6 +47,7 @@ impl JointImpedance {
             gains,
             feedforward,
             gravity_scale: DVector::from_element(n, 1.0),
+            friction: None,
         }
     }
 
@@ -64,6 +68,10 @@ impl JointImpedance {
                 let id = arm.inverse_dynamics(s.q.as_slice(), r.v.as_slice(), r.a.as_slice());
                 id - &s.gravity + s.gravity.component_mul(&self.gravity_scale)
             }
+        };
+        let tau = match &self.friction {
+            Some(f) => tau + f.compensation(&r.v),
+            None => tau,
         };
         JointCommand {
             axes: (0..n)

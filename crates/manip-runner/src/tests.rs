@@ -214,3 +214,96 @@ fn replay_is_bit_exact_and_catches_changes() {
     assert!(!changed.divergences.is_empty(), "a changed OSC gain went unnoticed");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Run the DM arm on the rigid plant with friction and the hardware effects,
+/// recording CSV; return (rms TCP error [m] in Osc, max |v| of the arm joints
+/// in Osc). `edit` rewrites the profile text first.
+fn osc_run_with(edit: impl Fn(String) -> String, source: &str, tag: &str) -> (f64, f64) {
+    let dir = std::env::temp_dir().join(format!("manip-friction-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let models = root().join("models").canonicalize().unwrap();
+    let text = std::fs::read_to_string(root().join("robots/rebot_b601_dm.toml"))
+        .unwrap()
+        .replace("../models", models.to_str().unwrap());
+    let path = dir.join("p.toml");
+    std::fs::write(&path, edit(text)).unwrap();
+    let (p, pdir) = RobotProfile::load(&path).unwrap();
+    let arm = assemble::load_arm(&p, &pdir).unwrap();
+    let friction = assemble::joints_in_order(&p, &arm)
+        .iter()
+        .map(|j| (j.sim_friction, j.sim_damping))
+        .collect();
+    let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let rigid = RigidPlant::new(arm.clone(), q0, 1.0 / p.control.rate_hz, p.sim.timestep_s, friction, p.sim.friction_v_eps)
+        .unwrap();
+    let fx = p.sim.effects.as_ref().unwrap();
+    let mut plant = EffectsPlant::new(
+        Box::new(rigid),
+        Effects {
+            command_delay_ticks: fx.command_delay_ticks,
+            observation_delay_ticks: 0,
+            jitter_probability: fx.jitter_probability,
+            quantization: Some(assemble::feedback_quantization(&p, &arm).unwrap()),
+            seed: 3,
+            period: std::time::Duration::from_secs_f64(1.0 / p.control.rate_hz),
+        },
+    );
+    let csv = dir.join("run.csv");
+    let src = match source {
+        "circle" => Source::Circle { radius: 0.05, freq_hz: 0.25, start: None },
+        _ => Source::None,
+    };
+    app::run(
+        &p,
+        &arm,
+        &mut plant,
+        src,
+        RunOptions {
+            mode: Mode::Osc,
+            start_pose: assemble::named_pose(&p, &arm, "ready"),
+            duration_s: Some(8.0),
+            fast: true,
+            record: Some(csv.clone()),
+            log: None,
+            status_every_s: 1e9,
+        },
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&csv).unwrap();
+    let mut lines = text.lines();
+    let head: Vec<&str> = lines.next().unwrap().split(',').collect();
+    let col = |n: &str| head.iter().position(|h| *h == n).unwrap();
+    let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).filter(|r: &Vec<&str>| r[1] == "Osc").collect();
+    let rows = &rows[rows.len() / 3..];
+    let f = |r: &Vec<&str>, n: &str| r[col(n)].parse::<f64>().unwrap();
+    let mut se = 0.0;
+    let mut vmax: f64 = 0.0;
+    for r in rows {
+        let e = [("tcp_x", "ref_x"), ("tcp_y", "ref_y"), ("tcp_z", "ref_z")]
+            .iter()
+            .map(|(a, b)| (f(r, a) - f(r, b)).powi(2))
+            .sum::<f64>();
+        se += e;
+        for j in 1..=6 {
+            vmax = vmax.max(f(r, &format!("v_joint{j}")).abs());
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    ((se / rows.len() as f64).sqrt(), vmax)
+}
+
+/// Friction feedforward in the OSC: tracking gets better when compensated,
+/// and a static hold stays still (no limit cycle from compensating on the
+/// quantized measured velocity).
+#[test]
+fn osc_friction_compensation_helps_and_holds_still() {
+    let off = |t: String| t.replace("\nfriction = ", "\nfriction_off = ").replace("friction_off", "#friction");
+    let (err_off, _) = osc_run_with(off, "circle", "off");
+    let (err_on, _) = osc_run_with(|t| t, "circle", "on");
+    eprintln!("osc rms: off {:.2} mm, on {:.2} mm", err_off * 1e3, err_on * 1e3);
+    eprintln!("osc rms: off {:.2} mm, on {:.2} mm", err_off * 1e3, err_on * 1e3);
+    assert!(err_on < 0.6 * err_off, "compensated {err_on} vs uncompensated {err_off}");
+    let (_, vmax_hold) = osc_run_with(|t| t, "none", "hold");
+    eprintln!("hold |v| max {vmax_hold:.5} rad/s");
+    assert!(vmax_hold < 0.01, "static hold moves: |v| max {vmax_hold}");
+}

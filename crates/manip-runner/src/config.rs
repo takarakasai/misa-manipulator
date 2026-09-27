@@ -71,6 +71,14 @@ pub struct ControlSection {
     /// Error at which Park counts as "arrived" [rad].
     #[serde(default = "default_park_tol")]
     pub park_tolerance: f64,
+    /// Velocity over which the Coulomb part of the friction feedforward ramps in,
+    /// for the joint law (evaluated at the clean reference velocity) [rad/s].
+    #[serde(default = "default_ff_eps_joint")]
+    pub friction_v_eps: f64,
+}
+
+fn default_ff_eps_joint() -> f64 {
+    0.05
 }
 
 fn default_ramp() -> f64 {
@@ -129,10 +137,18 @@ pub struct JointSection {
     /// Joint damping in the sim [N·m·s/rad].
     #[serde(default)]
     pub sim_damping: f64,
-    /// Coulomb friction in the sim [N·m] ([N] for prismatic). An estimate until
-    /// identified on hardware (misa-sysid).
+    /// Coulomb friction in the sim [N·m] ([N] for prismatic): the "true" plant.
+    /// An estimate until identified on hardware (misa-sysid).
     #[serde(default)]
     pub sim_friction: f64,
+    /// Coulomb friction the **controller** compensates [N·m] ([N] for prismatic).
+    /// Kept separate from `sim_friction` so a wrong estimate can be simulated.
+    /// 0 = no compensation.
+    #[serde(default)]
+    pub friction: f64,
+    /// Viscous friction the controller compensates [N·m·s/rad].
+    #[serde(default)]
+    pub viscous: f64,
 }
 
 fn one() -> f64 {
@@ -180,6 +196,18 @@ pub struct OscSection {
     /// Formulation (`accel_space` | `explicit` | `force_space`).
     #[serde(default = "default_formulation")]
     pub formulation: String,
+    /// Friction feedforward in the OSC (folded into `h`, evaluated at the
+    /// **measured** velocity) [rad/s]. Keep it at least ~3 LSB of the motors'
+    /// velocity feedback: in MuJoCo with DAMIAO quantization (0.015 rad/s per
+    /// LSB), 0.05 held still, 0.02 turned a static hold into a limit cycle
+    /// (0.13 rad/s, 0.6 mm), and 0.2 under-compensated the circle (2.4 mm vs
+    /// 1.3 mm at 0.05).
+    #[serde(default = "default_ff_eps_osc")]
+    pub friction_v_eps: f64,
+}
+
+fn default_ff_eps_osc() -> f64 {
+    0.05
 }
 
 fn default_backend() -> String {

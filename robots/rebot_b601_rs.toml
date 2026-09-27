@@ -44,6 +44,7 @@ armature = 0.015
 max_torque_rate = 400.0
 sim_damping = 0.5
 sim_friction = 0.3
+friction = 0.3
 
 [[joint]]
 name = "joint2"
@@ -58,6 +59,7 @@ armature = 0.015
 max_torque_rate = 400.0
 sim_damping = 0.5
 sim_friction = 0.3
+friction = 0.3
 
 [[joint]]
 name = "joint3"
@@ -72,6 +74,7 @@ armature = 0.015
 max_torque_rate = 400.0
 sim_damping = 0.5
 sim_friction = 0.3
+friction = 0.3
 
 [[joint]]
 name = "joint4"
@@ -86,6 +89,7 @@ armature = 0.003
 max_torque_rate = 150.0
 sim_damping = 0.1
 sim_friction = 0.08
+friction = 0.08
 
 [[joint]]
 name = "joint5"
@@ -100,6 +104,7 @@ armature = 0.003
 max_torque_rate = 150.0
 sim_damping = 0.1
 sim_friction = 0.08
+friction = 0.08
 
 [[joint]]
 name = "joint6"
@@ -114,6 +119,7 @@ armature = 0.003
 max_torque_rate = 150.0
 sim_damping = 0.1
 sim_friction = 0.08
+friction = 0.08
 
 # Gripper (in the model: displacement [m] of one finger; the other is a mimic added at import).
 # ratio = 0.05 m / 270° = 0.0106 m/rad (not measured) → motor-side kp ≈ 7 N·m/rad.
@@ -129,6 +135,7 @@ armature = 25.0
 effort = 150.0
 sim_damping = 150.0
 sim_friction = 5.0
+friction = 5.0
 
 # ── Poses ───────────────────────────────────────────────────────────
 # rest = folded pose (motor zero). Destination of Park.
@@ -164,7 +171,9 @@ joint_limits = true
 #   cycle later (~1 tick at 500 Hz with 7 motors on 1 Mbps CAN; estimate).
 # - jitter_probability: ticks where the command misses the bus cycle.
 # - quantize: feedback LSBs from the motor models in [hardware].
-# sim_friction in [[joint]] is an estimate until identified with misa-sysid.
+# sim_friction in [[joint]] is the simulated "true" friction; friction is what
+# the controller compensates (feedforward). Both are estimates until identified
+# with misa-sysid; set friction = 0 to turn compensation off.
 [sim.effects]
 command_delay_ticks = 1
 observation_delay_ticks = 0

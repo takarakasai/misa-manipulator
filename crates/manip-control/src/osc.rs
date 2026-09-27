@@ -70,6 +70,11 @@ impl TcpRef {
 
 #[derive(Debug, Clone)]
 pub struct OscConfig {
+    /// Friction feedforward, folded into the nonlinear term `h` so the QP plans
+    /// the torque that also cancels friction. Evaluated at the measured velocity
+    /// (the OSC has no joint reference), so give it a wider `v_eps` than the
+    /// joint law. `None` = off.
+    pub friction: Option<crate::friction::FrictionModel>,
     /// TCP translational PD [1/s², 1/s] (acceleration units).
     pub kp_lin: f64,
     pub kd_lin: f64,
@@ -142,6 +147,7 @@ impl OscConfig {
             sing_kd: 10.0,
             solution_check: 1.05,
             formulation: Formulation::AccelSpace,
+            friction: None,
             // Against a per-cycle budget of 2 ms (500 Hz), Clarabel takes a
             // median of 0.46 ms and ActiveSet 0.05–0.09 ms (B601-DM, 6 DOF,
             // osc_bench). Tracking results were the same.
@@ -246,7 +252,12 @@ impl Osc {
         );
 
         // ── level 0: physics and safety ────────────────────────────────
-        let d = Dynamics::new(c.formulation, &s.mass, &s.nle, &DMatrix::zeros(0, n), n);
+        // Plant: M·q̈ + h = τ − τ_friction  ⇒  plan with h' = h + τ_friction.
+        let nle = match &c.friction {
+            Some(f) => &s.nle + f.select(&idx).compensation(&s.v),
+            None => s.nle.clone(),
+        };
+        let d = Dynamics::new(c.formulation, &s.mass, &nle, &DMatrix::zeros(0, n), n);
         let big = 1e3;
         let cbf = JointLimitCbf {
             q_min: DVector::from_iterator(n, dofs.iter().map(|d| finite_or(d.q_min, -big))),

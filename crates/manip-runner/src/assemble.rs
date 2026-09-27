@@ -95,6 +95,7 @@ pub fn supervisor_config(p: &RobotProfile, arm: &ArmModel) -> SupervisorConfig {
             time_constant_s: c.shaper_time_constant_s,
         },
         rest: named_pose(p, arm, "rest").unwrap_or_else(|| DVector::zeros(arm.n())),
+        friction: friction_model(p, arm, p.control.friction_v_eps),
     }
 }
 
@@ -113,6 +114,7 @@ pub fn osc_config(p: &RobotProfile, arm: &ArmModel) -> Result<OscConfig, String>
     c.a_max = DVector::from_element(n, o.a_max);
     c.cbf_alpha = o.cbf_alpha;
     c.motor_kd = DVector::from_element(n, o.motor_kd);
+    c.friction = friction_model(p, arm, o.friction_v_eps);
     c.solve.backend = match o.backend.as_str() {
         "active_set" => misa_wbc::QpSolver::ActiveSet,
         "clarabel" => misa_wbc::QpSolver::Clarabel,
@@ -201,4 +203,16 @@ pub fn feedback_quantization(p: &RobotProfile, arm: &ArmModel) -> Result<Vec<[f6
                 .and_then(|(v, m)| manip_plant_can::feedback_resolution(v, m))
         })
         .collect()
+}
+
+/// The controller's friction estimate from `[[joint]] friction / viscous`;
+/// `None` when every joint is 0 (compensation off).
+pub fn friction_model(p: &RobotProfile, arm: &ArmModel, v_eps: f64) -> Option<manip_control::FrictionModel> {
+    let js = joints_in_order(p, arm);
+    let m = manip_control::FrictionModel {
+        coulomb: col(&js, |j| j.friction),
+        viscous: col(&js, |j| j.viscous),
+        v_eps,
+    };
+    (!m.is_zero()).then_some(m)
 }

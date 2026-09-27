@@ -86,6 +86,8 @@ pub struct SupervisorConfig {
     pub startup_ramp_s: f64,
     pub tcp_shaper: manip_control::TcpShaperLimits,
     pub rest: DVector<f64>,
+    /// Friction feedforward for the tracking law (reference velocity). `None` = off.
+    pub friction: Option<manip_control::FrictionModel>,
 }
 
 pub struct Supervisor {
@@ -109,6 +111,7 @@ impl Supervisor {
     pub fn new(cfg: SupervisorConfig, osc: Osc, arm: &ArmModel, q: &DVector<f64>) -> Self {
         let mut track = JointImpedance::new(cfg.track.clone(), cfg.feedforward);
         track.gravity_scale = cfg.gravity_scale.clone();
+        track.friction = cfg.friction.clone();
         let mut hold = JointImpedance::new(cfg.hold.clone(), manip_control::Feedforward::Gravity);
         hold.gravity_scale = cfg.gravity_scale.clone();
         let mut gravity = JointImpedance::gravity_comp(arm.n(), 0.0);
