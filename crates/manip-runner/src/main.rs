@@ -20,6 +20,7 @@ mod record;
 mod replay;
 mod rigid;
 mod supervisor;
+mod virtual_arm;
 #[cfg(test)]
 mod tests;
 
@@ -121,6 +122,9 @@ enum PlantKind {
     Rigid,
     /// Real hardware (CAN).
     Can,
+    /// The real CAN plant (bus threads, frame conversion, arm/disarm) driving
+    /// a virtual arm instead of CAN motors. Runs in real time.
+    VirtualCan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -164,7 +168,7 @@ fn real_main(cli: Cli) -> Result<(), String> {
             let (profile, dir) = RobotProfile::load(&robot)?;
             let arm = assemble::load_arm(&profile, &dir)?;
             log::info!("{} ({}): {} DOF, TCP = {}", profile.robot.name, arm.name(), arm.n(), profile.robot.tcp.link);
-            if fast && (plant == PlantKind::Can || source == SourceKind::Leader) {
+            if fast && (matches!(plant, PlantKind::Can | PlantKind::VirtualCan) || source == SourceKind::Leader) {
                 return Err("--fast is only allowed with sim + synthetic target".into());
             }
             let start_pose = match &start_pose {
@@ -175,7 +179,9 @@ fn real_main(cli: Cli) -> Result<(), String> {
                 None => None,
             };
             let src = make_source(&profile, &arm, source, leader.as_deref(), radius, freq)?;
-            let simulated = plant != PlantKind::Can;
+            // Effects wrap only the physics sims; virtual-can already has the
+            // real bus-thread timing.
+            let simulated = matches!(plant, PlantKind::Sim | PlantKind::Rigid);
             let mut plant = make_plant(plant, &profile, &dir, &arm)?;
             if simulated && !ideal {
                 plant = wrap_effects(plant, &profile, &arm, delay_ticks, jitter)?;
@@ -357,6 +363,36 @@ fn make_plant(
             Ok(Box::new(p))
         }
         PlantKind::Sim => make_sim(profile, dir, arm),
+        PlantKind::VirtualCan => {
+            let hw = profile.hardware.as_ref().ok_or("profile has no [hardware]")?;
+            let q0 = match &profile.sim.initial_pose {
+                Some(name) => assemble::named_pose(profile, arm, name)
+                    .ok_or_else(|| format!("[sim] initial_pose = \"{name}\" not found"))?,
+                None => nalgebra::DVector::zeros(arm.n()),
+            };
+            let friction = assemble::joints_in_order(profile, arm)
+                .iter()
+                .map(|j| (j.sim_friction, j.sim_damping))
+                .collect();
+            let motors = virtual_arm::virtual_motors(
+                arm,
+                &hw.bus,
+                q0,
+                friction,
+                profile.sim.friction_v_eps,
+                profile.sim.timestep_s,
+                virtual_arm::DEFAULT_TRANSACTION,
+            )?;
+            let p = manip_plant_can::CanArmPlant::with_actuators(
+                manip_plant_can::CanOptions {
+                    buses: hw.bus.clone(),
+                    joints: arm.dofs().iter().map(|d| d.name.clone()).collect(),
+                    stale_after: Duration::from_secs_f64(hw.stale_after_s),
+                },
+                motors,
+            )?;
+            Ok(Box::new(p))
+        }
         PlantKind::Rigid => {
             let q0 = match &profile.sim.initial_pose {
                 Some(name) => assemble::named_pose(profile, arm, name)

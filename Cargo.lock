@@ -1000,6 +1000,7 @@ dependencies = [
  "manip-model",
  "manip-plant-can",
  "manip-plant-mujoco",
+ "misa-actuator",
  "misa-core",
  "misa-wbc",
  "nalgebra",

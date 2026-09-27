@@ -73,6 +73,8 @@ manip run --robot robots/rebot_b601_dm.toml --plant sim --source sine --mode joi
 manip run --robot robots/rebot_b601_dm.toml --plant sim --source circle --mode osc --start-pose ready
 # シムは既定で実機の「悪さ」（遅延・ジッタ・量子化・摩擦）を掛ける。
 # --ideal で外す、--delay-ticks / --jitter で上書き。掃引は scripts/sweep_effects.py
+# 実機用 Plant（バススレッド・座標変換）を仮想の腕で回す（実時間）
+manip run --robot robots/rebot_b601_dm.toml --plant virtual-can --source sine --start-pose ready --duration 10
 # MuJoCo が無い環境: --plant rigid（接触なしの剛体積分、摩擦と悪さは同じく掛かる）
 manip run --robot robots/rebot_b601_rs.toml --plant rigid --source sine --duration 10 --fast
 

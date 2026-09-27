@@ -155,6 +155,27 @@ pub struct CanArmPlant {
 
 impl CanArmPlant {
     pub fn open(opts: CanOptions) -> Result<Self, String> {
+        let mut actuators = Vec::new();
+        for spec in &opts.buses {
+            actuators.push(open_bus(spec)?);
+        }
+        Self::with_actuators(opts, actuators)
+    }
+
+    /// Build over caller-provided motors instead of opening CAN interfaces:
+    /// `actuators[b][m]` is motor `m` of `opts.buses[b]`, speaking **motor
+    /// frame** units like the real driver would.
+    ///
+    /// Everything above the wire is the real code path: the per-bus threads,
+    /// the model <-> motor frame conversion, arm/disarm, the stale-setpoint
+    /// fallback. That is what makes a virtual arm behind this useful for
+    /// testing before the hardware exists.
+    pub fn with_actuators(opts: CanOptions, actuators: Vec<Vec<Motor>>) -> Result<Self, String> {
+        if actuators.len() != opts.buses.len()
+            || actuators.iter().zip(&opts.buses).any(|(a, b)| a.len() != b.motor.len())
+        {
+            return Err("actuator list does not match the [hardware] buses".into());
+        }
         let mut map = vec![None; opts.joints.len()];
         for (bi, b) in opts.buses.iter().enumerate() {
             for (mi, m) in b.motor.iter().enumerate() {
@@ -178,11 +199,12 @@ impl CanArmPlant {
             .map(|(i, m)| m.ok_or_else(|| format!("joint {} has no motor", opts.joints[i])))
             .collect::<Result<_, _>>()?;
 
-        let mut buses = Vec::new();
-        for spec in &opts.buses {
-            let actuators = open_bus(spec)?;
-            buses.push(Bus::spawn(spec.clone(), actuators, opts.stale_after));
-        }
+        let buses = opts
+            .buses
+            .iter()
+            .zip(actuators)
+            .map(|(spec, motors)| Bus::spawn(spec.clone(), motors, opts.stale_after))
+            .collect();
         let table = AxisTable::new(
             opts.joints
                 .iter()
@@ -342,7 +364,8 @@ pub fn feedback_resolution(vendor: Vendor, m: &MotorSpec) -> Result<[f64; 3], St
     Ok([lsb(p, 16.0) * r, lsb(v, bits_vt) * r, lsb(t, bits_vt) / r])
 }
 
-type Motor = Box<dyn Actuator + Send>;
+/// One motor on a bus, as the bus thread drives it.
+pub type Motor = Box<dyn Actuator + Send>;
 
 fn open_bus(spec: &BusSpec) -> Result<Vec<Motor>, String> {
     let mut out: Vec<Motor> = Vec::new();
@@ -519,5 +542,124 @@ mod tests {
         // RobStride: 16 bits on all three.
         let [p, v, t] = feedback_resolution(Vendor::Robstride, &spec("rs-00", 1.0)).unwrap();
         assert!(p > 0.0 && v < 0.01 && t < 0.01);
+    }
+
+    /// Motor that records the last MIT command and reports a fixed motor-frame state.
+    struct Recorder {
+        last: std::sync::Arc<Mutex<Option<[f32; 5]>>>,
+        state: [f32; 3],
+    }
+
+    impl Actuator for Recorder {
+        fn motor_id(&self) -> u8 {
+            7
+        }
+        fn enable(&mut self) -> misa_actuator::Result<misa_actuator::MotorFeedback> {
+            self.measure()
+        }
+        fn disable(&mut self) -> misa_actuator::Result<()> {
+            Ok(())
+        }
+        fn set_zero(&mut self) -> misa_actuator::Result<()> {
+            Ok(())
+        }
+        fn set_run_mode(&mut self, _: RunMode) -> misa_actuator::Result<()> {
+            Ok(())
+        }
+        fn set_position(&mut self, _: f32, _: f32) -> misa_actuator::Result<misa_actuator::MotorFeedback> {
+            self.measure()
+        }
+        fn set_velocity(&mut self, _: f32) -> misa_actuator::Result<misa_actuator::MotorFeedback> {
+            self.measure()
+        }
+        fn set_torque(&mut self, _: f32) -> misa_actuator::Result<misa_actuator::MotorFeedback> {
+            self.measure()
+        }
+        fn mit_control(&mut self, q: f32, v: f32, kp: f32, kd: f32, t: f32) -> misa_actuator::Result<misa_actuator::MotorFeedback> {
+            *self.last.lock().unwrap() = Some([q, v, kp, kd, t]);
+            self.measure()
+        }
+        fn measure(&mut self) -> misa_actuator::Result<misa_actuator::MotorFeedback> {
+            Ok(misa_actuator::MotorFeedback {
+                position_rad: self.state[0],
+                velocity_rad_per_s: self.state[1],
+                torque_nm: self.state[2],
+                current_a: 0.0,
+                temperature_c: 25.0,
+            })
+        }
+        fn read_status(&mut self) -> misa_actuator::Result<misa_actuator::MotorStatus> {
+            Err(misa_actuator::Error::Unsupported("test"))
+        }
+    }
+
+    /// Model <-> motor frame conversion, checked against the formulas written
+    /// out independently here, on a gripper-like axis where every term matters
+    /// (sign −1, non-zero zero, ratio ≠ 1): q_m = s(q − z)/r, v_m = s·v/r,
+    /// kp_m = r²·kp, kd_m = r²·kd, τ_m = s·r·τ; and back for the feedback.
+    #[test]
+    fn frame_conversion_matches_the_formulas() {
+        let (sign, zero, ratio) = (-1.0, 0.01, 0.00605);
+        let last = std::sync::Arc::new(Mutex::new(None));
+        let motor = Recorder { last: last.clone(), state: [-1.2, 0.5, 0.03] };
+        let spec = BusSpec {
+            interface: "virtual".into(),
+            vendor: Vendor::Damiao,
+            motor: vec![MotorSpec {
+                joint: "finger".into(),
+                id: 7,
+                host_id: None,
+                model: "dm4310".into(),
+                sign,
+                zero,
+                ratio,
+            }],
+        };
+        let mut plant = CanArmPlant::with_actuators(
+            CanOptions {
+                buses: vec![spec],
+                joints: vec!["finger".into()],
+                stale_after: Duration::from_secs(10),
+            },
+            vec![vec![Box::new(motor)]],
+        )
+        .unwrap();
+        plant.arm().unwrap();
+        let (q, v, kp, kd, tau) = (0.02, 0.03, 2.0e5, 5.0e3, 40.0);
+        let mut cmd = Command::idle(1);
+        *cmd.get_mut(AxisId::new(0)).unwrap() = misa_core::AxisCommand {
+            mode: ControlMode::Impedance,
+            position_rad: q,
+            velocity_rad_s: v,
+            torque_ff_nm: tau,
+            kp_nm_per_rad: kp,
+            kd_nm_s_per_rad: kd,
+        };
+        let mut obs = Observation::empty(1, 0);
+        let t0 = Instant::now();
+        loop {
+            plant.exchange(&cmd, &mut obs).unwrap();
+            let sent = *last.lock().unwrap();
+            if let Some(got) = sent.filter(|g| g[2] != 0.0) {
+                let want = [
+                    sign * (q - zero) / ratio,
+                    sign * v / ratio,
+                    ratio * ratio * kp,
+                    ratio * ratio * kd,
+                    sign * ratio * tau,
+                ];
+                for (g, w) in got.iter().zip(want) {
+                    assert!((*g as f64 - w).abs() <= 1e-5 * w.abs().max(1.0), "got {got:?}, want {want:?}");
+                }
+                break;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(2), "bus thread never sent the command");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Feedback: q = z + s·r·q_m, v = s·r·v_m, τ = s·τ_m/r.
+        let a = obs.axes()[0];
+        assert!((a.position_rad - (zero + sign * ratio * -1.2)).abs() < 1e-6);
+        assert!((a.velocity_rad_s - sign * ratio * 0.5).abs() < 1e-6);
+        assert!((a.torque_nm.unwrap() - sign * 0.03 / ratio).abs() < 1e-3);
     }
 }

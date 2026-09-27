@@ -17,6 +17,7 @@ manip-control = { workspace = true }
 manip-leader = { workspace = true }
 manip-plant-can = { workspace = true }
 misa-wbc = { workspace = true }
+misa-actuator = { workspace = true }
 misa-core = { workspace = true }
 nalgebra = { workspace = true }
 serde = { workspace = true }

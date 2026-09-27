@@ -307,3 +307,89 @@ fn osc_friction_compensation_helps_and_holds_still() {
     eprintln!("hold |v| max {vmax_hold:.5} rad/s");
     assert!(vmax_hold < 0.01, "static hold moves: |v| max {vmax_hold}");
 }
+
+/// The real CAN plant (bus threads, model <-> motor frame conversion incl. the
+/// gripper's m/rad ratio and sign, arm/disarm) driving a virtual arm: startup,
+/// start pose, joint tracking, Park and release complete, and tracking is sane.
+/// A wrong conversion (sign, zero, ratio, ratio² on the gains) would make the
+/// arm sag or run away here. Real time (~5 s).
+#[test]
+fn virtual_can_arm_runs_the_hardware_path() {
+    for name in ["rebot_b601_dm", "rebot_b601_rs"] {
+        let (p, arm) = robot(name);
+        let hw = p.hardware.as_ref().unwrap();
+        let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
+        let friction = assemble::joints_in_order(&p, &arm)
+            .iter()
+            .map(|j| (j.sim_friction, j.sim_damping))
+            .collect();
+        let motors = crate::virtual_arm::virtual_motors(
+            &arm,
+            &hw.bus,
+            q0,
+            friction,
+            p.sim.friction_v_eps,
+            p.sim.timestep_s,
+            crate::virtual_arm::DEFAULT_TRANSACTION,
+        )
+        .unwrap();
+        let mut plant = manip_plant_can::CanArmPlant::with_actuators(
+            manip_plant_can::CanOptions {
+                buses: hw.bus.clone(),
+                joints: arm.dofs().iter().map(|d| d.name.clone()).collect(),
+                stale_after: std::time::Duration::from_secs_f64(hw.stale_after_s),
+            },
+            motors,
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("manip-vcan-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("run.csv");
+        app::run(
+            &p,
+            &arm,
+            &mut plant,
+            Source::Sine {
+                leader: manip_leader::synthetic::SineLeader::new(p.sine.clone()),
+                dofs: p.sine.iter().map(|s| arm.dof(&s.name).unwrap()).collect(),
+            },
+            RunOptions {
+                mode: Mode::Joint,
+                start_pose: assemble::named_pose(&p, &arm, "ready"),
+                duration_s: Some(3.0),
+                fast: false,
+                record: Some(csv.clone()),
+                log: None,
+                status_every_s: 1e9,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        // rms |q - qref| over all DOFs while tracking.
+        let text = std::fs::read_to_string(&csv).unwrap();
+        let mut lines = text.lines();
+        let head: Vec<&str> = lines.next().unwrap().split(',').collect();
+        let pairs: Vec<(usize, usize)> = arm
+            .dofs()
+            .iter()
+            .map(|d| {
+                let c = |k: &str| head.iter().position(|h| *h == format!("{k}_{}", d.name)).unwrap();
+                (c("q"), c("qref"))
+            })
+            .collect();
+        let (mut se, mut n) = (0.0, 0usize);
+        for l in lines {
+            let r: Vec<&str> = l.split(',').collect();
+            if r[1] != "Joint" {
+                continue;
+            }
+            for &(q, qr) in &pairs[..6] {
+                let e = r[q].parse::<f64>().unwrap() - r[qr].parse::<f64>().unwrap();
+                se += e * e;
+                n += 1;
+            }
+        }
+        let rms = (se / n as f64).sqrt();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(rms < 0.03, "{name}: joint tracking rms {rms:.4} rad through the virtual CAN arm");
+    }
+}
