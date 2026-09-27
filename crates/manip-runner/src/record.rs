@@ -23,7 +23,11 @@ impl Recorder {
         let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
         let mut cols = vec!["t".to_string(), "mode".into(), "tick_us".into()];
         for d in arm.dofs() {
-            for k in ["q", "v", "qref", "vref", "tau"] {
+            // tau: what the control law asked for, evaluated at the observed state.
+            // taum: what the motor reports it applied (NaN if the plant has no
+            // torque feedback). They differ by the motor PD acting on the true,
+            // newer state; identification must use taum.
+            for k in ["q", "v", "qref", "vref", "tau", "taum"] {
                 cols.push(format!("{k}_{}", d.name));
             }
         }
@@ -43,6 +47,7 @@ impl Recorder {
         s: &ArmState,
         cmd: &JointCommand,
         info: &TickInfo,
+        obs: &misa_core::Observation,
     ) -> std::io::Result<()> {
         let mut out = format!("{t:.4},{mode:?},{tick_us:.0}");
         let tau = cmd.torque_at(&s.q, &s.v);
@@ -52,7 +57,8 @@ impl Recorder {
                 .as_ref()
                 .map(|r| (r.q[i], r.v[i]))
                 .unwrap_or((f64::NAN, f64::NAN));
-            out += &format!(",{:.6},{:.5},{:.6},{:.5},{:.4}", s.q[i], s.v[i], qr, vr, tau[i]);
+            let taum = obs.axes().get(i).and_then(|a| a.torque_nm).unwrap_or(f64::NAN);
+            out += &format!(",{:.6},{:.5},{:.6},{:.5},{:.4},{:.4}", s.q[i], s.v[i], qr, vr, tau[i], taum);
         }
         let p = s.tcp_pose.translation.vector;
         let r = info

@@ -82,6 +82,8 @@ manip run --robot robots/rebot_b601_rs.toml --plant rigid --source sine --durati
 manip hw --robot robots/rebot_b601_dm.toml scan
 manip hw --robot robots/rebot_b601_dm.toml sign
 manip hw --robot robots/rebot_b601_dm.toml jog --joint joint2 --delta 5
+# 摩擦の同定（シムでも実行可: --plant sim / rigid）。--write でプロファイルへ
+manip hw --robot robots/rebot_b601_dm.toml friction
 
 # リーダーの値を見る / ゼロ姿勢のオフセットを読む（サーボには書かない）
 manip leader --leader leaders/stararm102.toml

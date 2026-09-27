@@ -180,3 +180,216 @@ mod tests {
         assert_eq!(sign_verdict(-0.2, 0.05), Some(false));
     }
 }
+
+/// Friction fit for one joint: `τ_friction = coulomb·sign(v) + viscous·v`.
+#[derive(Debug, Clone)]
+pub struct FrictionFit {
+    pub joint: String,
+    pub coulomb: f64,
+    pub viscous: f64,
+    pub samples: usize,
+    /// rms of the fit residual [N·m].
+    pub residual: f64,
+}
+
+/// Fit friction from a `manip run --record` CSV of a friction sweep.
+///
+/// For each constant-velocity sample of joint `j` (reference speed above
+/// `v_min`, reference acceleration ~0, the other joints still), the friction
+/// torque is what the motor applied minus what the rigid-body model says the
+/// motion needs: `τ_applied − ID(q, v, 0)`. That is fitted with least squares
+/// to `Fc·sign(v_ref) + Fv·v`.
+///
+/// `τ_applied` is the motor's **reported** torque (`taum`). The commanded
+/// torque evaluated at the observed state (`tau`) is biased: the observation
+/// lags by the loop delay, so at speed `v` the motor PD sees a position error
+/// `kp·v·delay` larger than the logged one, which shows up as extra viscous
+/// friction (+0.16 N·m·s/rad on a kp = 60 joint at 2.7 ms in the sim). `tau`
+/// is used only if the plant reports no torque.
+///
+/// Run the sweep with soft position gains (`hw friction --kp-scale`): the
+/// sampled torque still carries a `kp·v·dt` sawtooth from the zero-order-held
+/// MIT position target, which with the tracking gains read as −12 % viscous
+/// friction in the sim.
+pub fn fit_friction(csv: &std::path::Path, arm: &ArmModel, joints: &[usize], v_min: f64) -> Result<Vec<FrictionFit>, String> {
+    let text = std::fs::read_to_string(csv).map_err(|e| format!("{}: {e}", csv.display()))?;
+    let mut lines = text.lines();
+    let head: Vec<&str> = lines.next().ok_or("empty CSV")?.split(',').collect();
+    let col = |k: &str| head.iter().position(|h| *h == k).ok_or_else(|| format!("column {k} missing"));
+    let n = arm.n();
+    let names: Vec<&str> = arm.dofs().iter().map(|d| d.name.as_str()).collect();
+    let cq: Vec<usize> = names.iter().map(|d| col(&format!("q_{d}"))).collect::<Result<_, _>>()?;
+    let cv: Vec<usize> = names.iter().map(|d| col(&format!("v_{d}"))).collect::<Result<_, _>>()?;
+    let cvr: Vec<usize> = names.iter().map(|d| col(&format!("vref_{d}"))).collect::<Result<_, _>>()?;
+    let ct: Vec<usize> = names.iter().map(|d| col(&format!("tau_{d}"))).collect::<Result<_, _>>()?;
+    let ctm: Vec<usize> = names.iter().map(|d| col(&format!("taum_{d}"))).collect::<Result<_, _>>()?;
+    let (c_t, c_mode) = (col("t")?, col("mode")?);
+
+    // (sign(vref), v, residual) per joint.
+    let mut data: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); n];
+    let mut prev: Option<(f64, Vec<f64>)> = None;
+    for line in lines {
+        let r: Vec<&str> = line.split(',').collect();
+        if r.len() < head.len() || r[c_mode] != "Joint" {
+            prev = None;
+            continue;
+        }
+        let f = |c: usize| r[c].parse::<f64>().unwrap_or(f64::NAN);
+        let t = f(c_t);
+        let vref: Vec<f64> = cvr.iter().map(|&c| f(c)).collect();
+        if let Some((tp, vp)) = &prev {
+            let dt = (t - tp).max(1e-6);
+            let q: Vec<f64> = cq.iter().map(|&c| f(c)).collect();
+            let v: Vec<f64> = cv.iter().map(|&c| f(c)).collect();
+            let id = arm.inverse_dynamics(&q, &v, &vec![0.0; n]);
+            for &j in joints {
+                let accel = (vref[j] - vp[j]).abs() / dt;
+                let others_still = (0..n).all(|k| k == j || vref[k].abs() < 1e-6);
+                // The joint must also have caught up with the reference: right
+                // after the reference reaches its cruise speed the joint is
+                // still accelerating, and that inertial torque (not in ID with
+                // a = 0) biased Fv low by ~30 % in the sim.
+                let caught_up = (v[j] - vref[j]).abs() < 0.05 * vref[j].abs();
+                if vref[j].abs() >= v_min && accel < 0.05 && others_still && caught_up {
+                    let applied = if f(ctm[j]).is_finite() { f(ctm[j]) } else { f(ct[j]) };
+                    data[j].push((vref[j].signum(), v[j], applied - id[j]));
+                }
+            }
+        }
+        prev = Some((t, vref));
+    }
+
+    joints
+        .iter()
+        .map(|&j| {
+            let d = &data[j];
+            if d.len() < 20 {
+                return Err(format!("{}: only {} constant-velocity samples", names[j], d.len()));
+            }
+            // Normal equations for [Fc, Fv].
+            let (mut a11, mut a12, mut a22, mut b1, mut b2) = (0.0, 0.0, 0.0, 0.0, 0.0);
+            for &(s, v, r) in d {
+                a11 += s * s;
+                a12 += s * v;
+                a22 += v * v;
+                b1 += s * r;
+                b2 += v * r;
+            }
+            let det = a11 * a22 - a12 * a12;
+            if det.abs() < 1e-12 {
+                return Err(format!("{}: sweep speeds too similar to separate Coulomb and viscous", names[j]));
+            }
+            let fc = (b1 * a22 - b2 * a12) / det;
+            let fv = (a11 * b2 - a12 * b1) / det;
+            let rms = (d.iter().map(|&(s, v, r)| (r - fc * s - fv * v).powi(2)).sum::<f64>() / d.len() as f64).sqrt();
+            Ok(FrictionFit {
+                joint: names[j].to_string(),
+                coulomb: fc,
+                viscous: fv,
+                samples: d.len(),
+                residual: rms,
+            })
+        })
+        .collect()
+}
+
+/// Rewrite `friction = ` / `viscous = ` of the given joints in a profile's
+/// text, keeping everything else (comments included) untouched.
+pub fn write_friction(text: &str, fits: &[FrictionFit]) -> String {
+    let mut out = String::new();
+    let mut current: Option<String> = None;
+    // Only `[[joint]]` tables: `[[sine]]` entries also have `name = "joint1"`.
+    let mut in_joint = false;
+    let mut pending: Vec<&FrictionFit> = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let flush = |out: &mut String, pending: &mut Vec<&FrictionFit>| {
+        for f in pending.drain(..) {
+            out.push_str(&format!("friction = {:.4}\nviscous = {:.4}\n", f.coulomb.max(0.0), f.viscous.max(0.0)));
+        }
+    };
+    for line in lines {
+        let t = line.trim();
+        if t.starts_with('[') {
+            flush(&mut out, &mut pending);
+            current = None;
+            in_joint = t == "[[joint]]";
+        }
+        if let Some(name) = t.strip_prefix("name = \"").and_then(|x| x.strip_suffix('"')).filter(|_| in_joint) {
+            current = Some(name.to_string());
+            if let Some(f) = fits.iter().find(|f| f.joint == name) {
+                pending.push(f);
+            }
+        }
+        let is_ours = current.as_deref().is_some_and(|c| fits.iter().any(|f| f.joint == c));
+        if is_ours && (t.starts_with("friction =") || t.starts_with("viscous =")) {
+            continue; // replaced by the flushed pair
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    flush(&mut out, &mut pending);
+    out
+}
+
+/// Options of a friction sweep (`manip hw friction`).
+pub struct FrictionSweep {
+    pub dofs: Vec<usize>,
+    /// Sweep speeds [rad/s].
+    pub speeds: Vec<f64>,
+    /// Half-width of the sweep around `[pose.ready]` [rad], clipped to the range.
+    pub amplitude: f64,
+    pub cycles: usize,
+    /// Scale on the tracking `kp` during the sweep (see [`fit_friction`]).
+    pub kp_scale: f64,
+    /// Don't wait for real time (simulated plants only).
+    pub fast: bool,
+}
+
+/// Run a friction sweep from `[pose.ready]` on `plant`, record it to `csv`,
+/// and fit every swept joint.
+pub fn friction_sweep(
+    profile: &crate::config::RobotProfile,
+    arm: &ArmModel,
+    plant: &mut dyn Plant,
+    o: &FrictionSweep,
+    csv: &std::path::Path,
+) -> Result<Vec<FrictionFit>, String> {
+    let mut profile = profile.clone();
+    for j in &mut profile.joint {
+        j.kp *= o.kp_scale;
+    }
+    let base = crate::assemble::named_pose(&profile, arm, "ready").ok_or("friction sweep starts from [pose.ready]")?;
+    let margin = 0.05;
+    let plan = crate::app::SweepPlan {
+        joints: o
+            .dofs
+            .iter()
+            .map(|&d| {
+                let dof = &arm.dofs()[d];
+                ((d), (base[d] - o.amplitude).max(dof.q_min + margin), (base[d] + o.amplitude).min(dof.q_max - margin))
+            })
+            .collect(),
+        speeds: o.speeds.clone(),
+        cycles: o.cycles,
+        settle_s: 0.3,
+    };
+    let duration = profile.control.startup_ramp_s + 6.0 + plan.duration(&base);
+    log::info!("friction sweep: {} joints, about {:.0} s", o.dofs.len(), duration);
+    crate::app::run(
+        &profile,
+        arm,
+        plant,
+        crate::app::Source::Sweep { plan, start: None },
+        crate::app::RunOptions {
+            mode: crate::supervisor::Mode::Joint,
+            start_pose: Some(base),
+            duration_s: Some(duration),
+            fast: o.fast,
+            record: Some(csv.to_path_buf()),
+            log: None,
+            status_every_s: 2.0,
+        },
+    )?;
+    let v_min = 0.8 * o.speeds.iter().cloned().fold(f64::INFINITY, f64::min);
+    fit_friction(csv, arm, &o.dofs, v_min)
+}

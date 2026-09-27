@@ -140,6 +140,35 @@ enum HwCmd {
         #[arg(long, default_value_t = 15.0)]
         timeout: f64,
     },
+    /// Identify joint friction: sweep each joint at constant speeds, fit
+    /// `Fc·sign(v) + Fv·v` to (commanded torque − rigid-body model). Runs on
+    /// any plant (a sim has a known answer to check against).
+    Friction {
+        /// Joints to identify (default: the arm joints on the TCP chain).
+        #[arg(long, value_delimiter = ',')]
+        joints: Vec<String>,
+        /// Sweep speeds [rad/s].
+        #[arg(long, value_delimiter = ',', default_value = "0.2,0.5,1.0")]
+        speeds: Vec<f64>,
+        /// Half-width of the sweep around the start pose [rad] (clipped to the range).
+        #[arg(long, default_value_t = 0.5)]
+        amplitude: f64,
+        #[arg(long, default_value_t = 2)]
+        cycles: usize,
+        /// Scale on the position gains `kp` during the sweep. The MIT position
+        /// target is held for a whole control period while the joint moves, so
+        /// the motor's PD torque saws by up to `kp·v·dt` within each period and
+        /// a sampled torque is biased by an amount proportional to speed (read
+        /// as viscous friction). Softer `kp` shrinks that bias in proportion.
+        #[arg(long, default_value_t = 0.1)]
+        kp_scale: f64,
+        /// Write the result into the profile's `friction` / `viscous`.
+        #[arg(long)]
+        write: bool,
+        /// Where to keep the sweep's CSV.
+        #[arg(long, default_value = "logs/friction.csv")]
+        record: PathBuf,
+    },
     /// Energize, hold, move one joint by `delta` degrees and back, fold, release.
     Jog {
         #[arg(long)]
@@ -245,7 +274,7 @@ fn real_main(cli: Cli) -> Result<(), String> {
             )
         }
         Cmd::Hw { robot, plant, cmd } => {
-            if !matches!(plant, PlantKind::Can | PlantKind::VirtualCan) {
+            if !matches!(plant, PlantKind::Can | PlantKind::VirtualCan) && !matches!(cmd, HwCmd::Friction { .. }) {
                 return Err("hw commands run on --plant can or virtual-can".into());
             }
             let (profile, dir) = RobotProfile::load(&robot)?;
@@ -262,6 +291,34 @@ fn real_main(cli: Cli) -> Result<(), String> {
                     } else {
                         Err("sign check found problems".into())
                     }
+                }
+                HwCmd::Friction { joints, speeds, amplitude, cycles, kp_scale, write, record } => {
+                    let dofs: Vec<usize> = if joints.is_empty() {
+                        arm.tcp_chain()
+                    } else {
+                        joints.iter().map(|j| arm.dof(j).map_err(|e| e.to_string())).collect::<Result<_, _>>()?
+                    };
+                    let simulated = matches!(plant, PlantKind::Sim | PlantKind::Rigid);
+                    if simulated {
+                        p = wrap_effects(p, &profile, &arm, None, None)?;
+                    }
+                    let opts = hw::FrictionSweep { dofs, speeds, amplitude, cycles, kp_scale, fast: simulated };
+                    let fits = hw::friction_sweep(&profile, &arm, p.as_mut(), &opts, &record)?;
+                    let js = assemble::joints_in_order(&profile, &arm);
+                    println!("{:<14} {:>9} {:>9} {:>8} {:>9}   (profile now: friction / viscous)", "joint", "Fc[N·m]", "Fv", "samples", "resid");
+                    for f in &fits {
+                        let j = js.iter().find(|j| j.name == f.joint).unwrap();
+                        println!(
+                            "{:<14} {:>9.4} {:>9.4} {:>8} {:>9.4}   ({:.4} / {:.4})",
+                            f.joint, f.coulomb, f.viscous, f.samples, f.residual, j.friction, j.viscous
+                        );
+                    }
+                    if write {
+                        let text = std::fs::read_to_string(&robot).map_err(|e| e.to_string())?;
+                        std::fs::write(&robot, hw::write_friction(&text, &fits)).map_err(|e| e.to_string())?;
+                        println!("wrote friction / viscous into {}", robot.display());
+                    }
+                    Ok(())
                 }
                 HwCmd::Jog { joint, delta, period } => {
                     let dof = arm.dof(&joint).map_err(|e| e.to_string())?;

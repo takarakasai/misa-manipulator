@@ -37,6 +37,10 @@ pub enum Source {
     /// Draw a circle with the TCP (for checking OSC). y-z plane; the TCP at start lies
     /// on the circle.
     Circle { radius: f64, freq_hz: f64, start: Option<Isometry3<f64>> },
+    /// Friction identification sweep (`manip hw friction`): per joint in turn,
+    /// the others holding where they started, a triangle wave between `lo` and
+    /// `hi` at each speed in turn.
+    Sweep { plan: SweepPlan, start: Option<(f64, DVector<f64>)> },
     /// Move one joint by `delta` and back (raised cosine over `period_s`),
     /// then hold where it started. For bring-up (`manip hw jog`).
     Jog { dof: usize, delta: f64, period_s: f64, start: Option<(f64, DVector<f64>)> },
@@ -67,6 +71,14 @@ impl Source {
                 let _ = arm;
                 Target::Tcp { pose, posture: keep.clone() }
             }
+            Source::Sweep { plan, start } => {
+                let (t0, q0) = start.get_or_insert_with(|| (t, keep.clone())).clone();
+                let mut q = q0.clone();
+                if let Some((dof, x)) = plan.at(t - t0, &q0) {
+                    q[dof] = x;
+                }
+                Target::Joint(q)
+            }
             Source::Jog { dof, delta, period_s, start } => {
                 let (t0, q0) = start.get_or_insert_with(|| (t, keep.clone())).clone();
                 let tau = ((t - t0) / *period_s).clamp(0.0, 1.0);
@@ -83,6 +95,73 @@ impl Source {
                 _ => Target::None,
             },
         }
+    }
+}
+
+/// Schedule of a friction sweep. Per joint: settle at `lo`, then for each
+/// speed `cycles` round trips `lo -> hi -> lo`, then return to the start pose.
+#[derive(Debug, Clone)]
+pub struct SweepPlan {
+    pub joints: Vec<(usize, f64, f64)>,
+    pub speeds: Vec<f64>,
+    pub cycles: usize,
+    /// Pause at each end [s] (settles the shaper before the next leg).
+    pub settle_s: f64,
+}
+
+impl SweepPlan {
+    fn joint_duration(&self, lo: f64, hi: f64, q0: f64) -> f64 {
+        let span = hi - lo;
+        let v0 = self.speeds.first().copied().unwrap_or(0.2);
+        let approach = (q0 - lo).abs() / v0 + self.settle_s;
+        let sweeps: f64 = self.speeds.iter().map(|v| self.cycles as f64 * 2.0 * (span / v + self.settle_s)).sum();
+        approach + sweeps + (q0 - lo).abs() / v0 + self.settle_s
+    }
+
+    /// Total duration from the start pose `q0`.
+    pub fn duration(&self, q0: &DVector<f64>) -> f64 {
+        self.joints.iter().map(|&(d, lo, hi)| self.joint_duration(lo, hi, q0[d])).sum()
+    }
+
+    /// (joint, target) at time `t` since the sweep started; `None` once done.
+    pub fn at(&self, mut t: f64, q0: &DVector<f64>) -> Option<(usize, f64)> {
+        for &(d, lo, hi) in &self.joints {
+            let total = self.joint_duration(lo, hi, q0[d]);
+            if t >= total {
+                t -= total;
+                continue;
+            }
+            let v0 = self.speeds.first().copied().unwrap_or(0.2);
+            // Approach lo.
+            let a = (q0[d] - lo).abs() / v0;
+            if t < a {
+                return Some((d, q0[d] + (lo - q0[d]) * t / a.max(1e-9)));
+            }
+            t -= a;
+            if t < self.settle_s {
+                return Some((d, lo));
+            }
+            t -= self.settle_s;
+            for &v in &self.speeds {
+                let leg = (hi - lo) / v;
+                for _ in 0..self.cycles {
+                    for (from, to) in [(lo, hi), (hi, lo)] {
+                        if t < leg {
+                            return Some((d, from + (to - from) * t / leg));
+                        }
+                        t -= leg;
+                        if t < self.settle_s {
+                            return Some((d, to));
+                        }
+                        t -= self.settle_s;
+                    }
+                }
+            }
+            // Return to the start pose.
+            let r = (q0[d] - lo).abs() / v0;
+            return Some((d, if t < r { lo + (q0[d] - lo) * t / r.max(1e-9) } else { q0[d] }));
+        }
+        None
     }
 }
 
@@ -268,7 +347,7 @@ pub fn run(
         let tick_us = tick_start.elapsed().as_secs_f64() * 1e6;
         max_tick_us = max_tick_us.max(tick_us);
         if let Some(r) = rec.as_mut() {
-            r.row(t, policy.mode(), tick_us, &out.state, &out.joint_command, &out.info)
+            r.row(t, policy.mode(), tick_us, &out.state, &out.joint_command, &out.info, &obs)
                 .map_err(|e| e.to_string())?;
         }
         if let Some(l) = log.as_mut() {

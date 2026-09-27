@@ -411,3 +411,55 @@ fn sign_hints_are_mirrored_between_dm_and_rs() {
         assert_eq!(hr, flip(&hd), "joint{}: DM '{hd}' vs RS '{hr}'", i + 1);
     }
 }
+
+
+/// Friction identification recovers the simulated plant's friction (rigid
+/// plant with the hardware effects), and --write puts it into the profile.
+#[test]
+fn friction_sweep_recovers_the_plant() {
+    let (p, arm) = robot("rebot_b601_dm");
+    let dofs = vec![arm.dof("joint1").unwrap(), arm.dof("joint4").unwrap()];
+    let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let truth: Vec<(f64, f64)> = assemble::joints_in_order(&p, &arm)
+        .iter()
+        .map(|j| (j.sim_friction, j.sim_damping))
+        .collect();
+    let rigid = RigidPlant::new(arm.clone(), q0, 1.0 / p.control.rate_hz, p.sim.timestep_s, truth.clone(), p.sim.friction_v_eps)
+        .unwrap();
+    let fx = p.sim.effects.as_ref().unwrap();
+    let mut plant = EffectsPlant::new(
+        Box::new(rigid),
+        Effects {
+            command_delay_ticks: fx.command_delay_ticks,
+            observation_delay_ticks: 0,
+            jitter_probability: fx.jitter_probability,
+            quantization: Some(assemble::feedback_quantization(&p, &arm).unwrap()),
+            seed: 5,
+            period: std::time::Duration::from_secs_f64(1.0 / p.control.rate_hz),
+        },
+    );
+    let csv = std::env::temp_dir().join(format!("manip-friction-id-{}.csv", std::process::id()));
+    let fits = crate::hw::friction_sweep(
+        &p,
+        &arm,
+        &mut plant,
+        &crate::hw::FrictionSweep { dofs: dofs.clone(), speeds: vec![0.2, 0.5, 1.0], amplitude: 0.5, cycles: 2, kp_scale: 0.1, fast: true },
+        &csv,
+    )
+    .unwrap();
+    let _ = std::fs::remove_file(&csv);
+    for (f, &d) in fits.iter().zip(&dofs) {
+        let (fc, fv) = truth[d];
+        assert!((f.coulomb - fc).abs() < 0.1 * fc, "{}: Fc {:.4} vs {fc}", f.joint, f.coulomb);
+        assert!((f.viscous - fv).abs() < 0.1 * fv, "{}: Fv {:.4} vs {fv}", f.joint, f.viscous);
+    }
+    // Writing keeps the rest of the profile and replaces only these joints' values.
+    let text = std::fs::read_to_string(root().join("robots/rebot_b601_dm.toml")).unwrap();
+    let out = crate::hw::write_friction(&text, &fits);
+    let reparsed: RobotProfile = toml::from_str(&out).unwrap();
+    let j1 = reparsed.joint.iter().find(|j| j.name == "joint1").unwrap();
+    assert!((j1.friction - fits[0].coulomb).abs() < 1e-3 && (j1.viscous - fits[0].viscous).abs() < 1e-3);
+    let j2 = reparsed.joint.iter().find(|j| j.name == "joint2").unwrap();
+    assert_eq!(j2.friction, 0.3, "untouched joint changed");
+    assert_eq!(out.lines().count(), text.lines().count() + 2, "only a viscous line per written joint should be added");
+}
