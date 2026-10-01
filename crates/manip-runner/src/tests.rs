@@ -480,7 +480,12 @@ fn safety_box_contains_rest_and_ready() {
         for pose in ["rest", "ready"] {
             let q = assemble::named_pose(&p, &arm, pose).unwrap();
             assert_eq!(g.violation(&arm, q.as_slice()), 0.0, "{name} {pose} violates [safety]");
-            assert_eq!(g.joint_violation(&arm, q.as_slice()), 0.0, "{name} {pose} violates [safety] with the joint margin");
+            assert_eq!(
+                g.joint_violation(&arm, q.as_slice()),
+                0.0,
+                "{name} {pose} violates [safety] with the joint margin: {}",
+                g.explain(&arm, q.as_slice())
+            );
         }
     }
 }
@@ -604,6 +609,12 @@ fn joint_guard_prevents_self_collision() {
     let rest = assemble::named_pose(&p, &arm, "rest").unwrap();
     let mut sc = manip_model::collision::SelfCollision::build(&arm).unwrap();
     sc.exclude_close_at(&arm, rest.as_slice(), cfg.collision_margin);
+    sc.exclude_pairs(
+        &cfg.exclude_pairs
+            .iter()
+            .map(|[a, b]| (a.clone(), b.clone()))
+            .collect::<Vec<_>>(),
+    );
     let g = crate::guard::SafetyModel::build(cfg, &arm, Some(rest.as_slice())).unwrap();
     // Deterministic search for a pose that is inside the box but self-colliding,
     // near the ready pose (so the arm can head there from ready).
@@ -646,5 +657,92 @@ fn joint_guard_prevents_self_collision() {
         .map(|k| sc.min_distance(&arm, &cols.iter().map(|c| c[k]).collect::<Vec<_>>()))
         .fold(f64::INFINITY, f64::min);
     eprintln!("closest approach while tracking: {dmin:.4} m");
+    }
     assert!(dmin > 0.0, "links touched: {dmin:.4}");
+}
+
+/// Diagnostic: for each checked pair, the share of uniformly sampled poses
+/// (all arm joints, within limits) where it is under the margin, and the
+/// joints between the two links. `cargo test -- --ignored --nocapture pair_survey`
+#[test]
+#[ignore]
+fn pair_survey() {
+    for name in ["rebot_b601_dm", "rebot_b601_rs"] {
+        let (p, arm) = robot(name);
+        let g = p.safety.as_ref().unwrap();
+        let rest = assemble::named_pose(&p, &arm, "rest").unwrap();
+        let mut sc = manip_model::collision::SelfCollision::build(&arm).unwrap();
+        sc.exclude_close_at(&arm, rest.as_slice(), g.collision_margin);
+        sc.exclude_pairs(
+            &g.exclude_pairs
+                .iter()
+                .map(|[a, b]| (a.clone(), b.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let n = 20000;
+        let mut hits = std::collections::BTreeMap::<String, usize>::new();
+        let mut floor = std::collections::BTreeMap::<String, f64>::new();
+        for _ in 0..n {
+            let q: Vec<f64> = arm
+                .dofs()
+                .iter()
+                .map(|d| d.q_min + (d.q_max - d.q_min) * rnd())
+                .collect();
+            let mut seen = std::collections::BTreeSet::new();
+            for x in sc.close_pairs(&arm, &q, 0.03) {
+                let k = format!("{} – {}", x.link_a, x.link_b);
+                let m = floor.entry(k.clone()).or_insert(f64::INFINITY);
+                *m = m.min(x.distance);
+                if x.distance < g.collision_margin {
+                    seen.insert(k);
+                }
+            }
+            for k in seen {
+                *hits.entry(k).or_default() += 1;
+            }
+        }
+        println!("{name}:");
+        for (k, m) in floor {
+            let c = hits.get(&k).copied().unwrap_or(0);
+            println!(
+                "  {k}: min {:.1} mm, under the margin {:.1} %",
+                m * 1e3,
+                100.0 * c as f64 / n as f64
+            );
+        }
+    }
+}
+
+/// The DM wrist hulls (link3 and link5, across joint4 and joint5) overlap
+/// within the joint range, so the profile excludes the pair: the guard must
+/// allow the whole wrist range from the ready pose.
+#[test]
+fn dm_wrist_range_is_not_guarded() {
+    let (p, arm) = robot("rebot_b601_dm");
+    let rest = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let ready = assemble::named_pose(&p, &arm, "ready").unwrap();
+    let g =
+        crate::guard::SafetyModel::build(p.safety.as_ref().unwrap(), &arm, Some(rest.as_slice()))
+            .unwrap();
+    let (d4, d5) = (&arm.dofs()[3], &arm.dofs()[4]);
+    for a in 0..=12 {
+        for b in 0..=12 {
+            let mut q = ready.clone();
+            q[3] = d4.q_min + (d4.q_max - d4.q_min) * a as f64 / 12.0;
+            q[4] = d5.q_min + (d5.q_max - d5.q_min) * b as f64 / 12.0;
+            assert_eq!(
+                g.joint_violation(&arm, q.as_slice()),
+                0.0,
+                "{}",
+                g.explain(&arm, q.as_slice())
+            );
+        }
+    }
 }

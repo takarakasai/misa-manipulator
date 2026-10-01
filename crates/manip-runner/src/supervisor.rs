@@ -75,6 +75,9 @@ pub struct TickInfo {
     /// Joint mode: the reference step was refused by the workspace /
     /// self-collision guard and the reference held.
     pub guarded: bool,
+    /// Set on the first guarded tick of an episode: what the refused step's
+    /// stopping point would have violated (for the operator log).
+    pub guard_reason: Option<String>,
 }
 
 pub struct SupervisorConfig {
@@ -109,6 +112,8 @@ pub struct Supervisor {
     /// Time since startup [s] (for the gain ramp-up).
     t: f64,
     pub osc_failures: u64,
+    /// The previous Joint-mode tick was guarded (episodes are logged once).
+    guarding: bool,
 }
 
 impl Supervisor {
@@ -136,6 +141,7 @@ impl Supervisor {
             hold_q: q.clone(),
             t: 0.0,
             osc_failures: 0,
+            guarding: false,
         }
     }
 
@@ -210,12 +216,17 @@ impl Supervisor {
                             (0..r.q.len()).map(|i| r.q[i] + r.v[i] * r.v[i].abs() / (2.0 * a_brake[i])),
                         )
                     };
-                    if g.joint_violation(arm, stop(&r).as_slice()) > g.joint_violation(arm, stop(&prev).as_slice()) + 1e-9 {
+                    let refused = stop(&r);
+                    if g.joint_violation(arm, refused.as_slice()) > g.joint_violation(arm, stop(&prev).as_slice()) + 1e-9 {
+                        if !self.guarding {
+                            info.guard_reason = Some(g.explain(arm, refused.as_slice()));
+                        }
                         r = brake(&prev, &a_brake, dt);
                         self.shaper.restore(r.clone());
                         info.guarded = true;
                     }
                 }
+                self.guarding = info.guarded;
                 let mut c = self.track.command(arm, s, &r);
                 scale_gains(&mut c, ramp);
                 info.reference = Some(r);

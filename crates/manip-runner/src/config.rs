@@ -368,6 +368,10 @@ pub struct SafetySection {
     /// checked (vendor meshes interpenetrate when folded).
     #[serde(default = "default_exclude_pose")]
     pub exclude_at_pose: String,
+    /// Link pairs never checked, e.g. across the wrist, where the convex
+    /// hulls overlap within the joint range though the real parts clear.
+    #[serde(default)]
+    pub exclude_pairs: Vec<[String; 2]>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

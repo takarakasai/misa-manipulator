@@ -122,6 +122,24 @@ impl SelfCollision {
         dropped
     }
 
+    /// Stop checking the given link pairs (either order). Returns the names
+    /// that matched no checked pair (typos, or pairs already dropped).
+    pub fn exclude_pairs(&mut self, names: &[(String, String)]) -> Vec<(String, String)> {
+        let hulls = &self.hulls;
+        let same = |i: usize, j: usize, (a, b): &(String, String)| {
+            (hulls[i].link == *a && hulls[j].link == *b)
+                || (hulls[i].link == *b && hulls[j].link == *a)
+        };
+        let unmatched = names
+            .iter()
+            .filter(|n| !self.pairs.iter().any(|&(i, j)| same(i, j, n)))
+            .cloned()
+            .collect();
+        self.pairs
+            .retain(|&(i, j)| !names.iter().any(|n| same(i, j, n)));
+        unmatched
+    }
+
     /// Checked pairs closer than `within` at `q`, closest first.
     pub fn close_pairs(&self, arm: &ArmModel, q: &[f64], within: f64) -> Vec<PairDistance> {
         let poses = arm.joint_poses(q);

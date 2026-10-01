@@ -151,7 +151,9 @@ joint4 = 0.3
 # and surroundings before running on hardware.
 # Self-collision uses convex hulls of the collision meshes; link pairs already
 # touching at exclude_at_pose (the folded rest pose, where the vendor meshes
-# interpenetrate) are not checked.
+# interpenetrate) are not checked, nor exclude_pairs. link3–link5 spans the
+# wrist (joint4, joint5): their hulls overlap over half of the joint range
+# (up to 4 mm), so the guard would stop the wrist where the parts clear.
 [safety]
 box_min = [-0.50, -0.80, 0.03]
 box_max = [0.85, 0.80, 0.95]
@@ -159,6 +161,7 @@ points = [{ link = "link3" }, { link = "link5" }]
 self_collision = true
 collision_margin = 0.005
 exclude_at_pose = "rest"
+exclude_pairs = [["link3", "link5"]]
 
 # ── OSC (operational space control) ─────────────────────────────────
 [osc]

@@ -298,6 +298,7 @@ pub fn run(
     let mut approaching = false;
     let mut overruns = 0u64;
     let mut max_tick_us: f64 = 0.0;
+    let mut last_guard_log = f64::NEG_INFINITY;
     let mut last_gate_log = -1.0;
     let result: Result<(), String> = loop {
         let tick_start = Instant::now();
@@ -357,6 +358,15 @@ pub fn run(
         let out = policy.step(arm, &obs, &requests, &target);
         if let Some(tr) = &out.info.transition {
             log::info!("{tr}");
+        }
+        if let Some(why) = out
+            .info
+            .guard_reason
+            .as_ref()
+            .filter(|_| t - last_guard_log > 1.0)
+        {
+            last_guard_log = t;
+            log::warn!("guard: reference held at the safety boundary: {why}");
         }
         if !out.verdict.is_clean() && t - last_gate_log > 1.0 {
             log::warn!("SafetyGate: {:?}", out.verdict);
