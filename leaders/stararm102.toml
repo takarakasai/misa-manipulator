@@ -8,7 +8,10 @@
 #   Some versions of Seeed's standalone plugin have no signs; **which is correct is unconfirmed**.
 #   Verify by moving one axis at a time with `manip run ... --plant sim --source leader`.
 # - range: LeRobot joint range of the follower (B601-DM) [deg].
-# - offset_deg: servo angle at the zero pose (folded, gripper closed). 0 if Seeed's
+# - offset_deg: measured 2026-10-02 with `manip leader --zero` on this unit
+#   (all within ±2.6°: the servos were zeroed at the factory, the rest is how
+#   precisely the arm sat in the zero pose).
+# - offset_deg (general): servo angle at the zero pose (folded, gripper closed). 0 if Seeed's
 #   calibration (set_origin_point) has been done. Otherwise copy the output of
 #   `manip leader --leader <this> --zero` here (it is not written to servo NVM).
 
@@ -28,36 +31,42 @@ sync_group = 3
 name = "shoulder_pan"
 servo = 0
 sign = -1.0
+offset_deg = 0.70
 range_deg = [-150.0, 150.0]
 
 [[joint]]
 name = "shoulder_lift"
 servo = 1
 sign = -1.0
+offset_deg = -2.26
 range_deg = [-200.0, 1.0]
 
 [[joint]]
 name = "elbow_flex"
 servo = 2
 sign = 1.0
+offset_deg = -0.40
 range_deg = [-200.0, 1.0]
 
 [[joint]]
 name = "wrist_flex"
 servo = 3
 sign = 1.0
+offset_deg = 2.30
 range_deg = [-80.0, 90.0]
 
 [[joint]]
 name = "wrist_yaw"
 servo = 4
 sign = 1.0
+offset_deg = 1.10
 range_deg = [-90.0, 90.0]
 
 [[joint]]
 name = "wrist_roll"
 servo = 5
 sign = -1.0
+offset_deg = -2.59
 range_deg = [-90.0, 90.0]
 
 [[joint]]
@@ -65,4 +74,5 @@ name = "gripper"
 servo = 6
 sign = -1.0
 scale = 6.0
+offset_deg = 0.00
 range_deg = [-270.0, 0.0]
