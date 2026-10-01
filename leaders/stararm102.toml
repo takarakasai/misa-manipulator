@@ -20,6 +20,9 @@ rate_hz = 200
 timeout_ms = 10
 release_on_start = true
 reset_multi_turn = true
+# Servos per sync-monitor request: the CH340 hub drops bytes from the 4th
+# reply on (25-35 % at 1 Mbps, 2026-10-02); groups of 3 lose none (95 Hz).
+sync_group = 3
 
 [[joint]]
 name = "shoulder_pan"

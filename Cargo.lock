@@ -484,7 +484,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 [[package]]
 name = "damiao-driver"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 dependencies = [
  "damiao-protocol",
  "log",
@@ -496,7 +496,7 @@ dependencies = [
 [[package]]
 name = "damiao-protocol"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 
 [[package]]
 name = "darling"
@@ -724,13 +724,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "fashionstar-driver"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 dependencies = [
  "fashionstar-protocol",
  "log",
@@ -742,7 +742,7 @@ dependencies = [
 [[package]]
 name = "fashionstar-protocol"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 
 [[package]]
 name = "fdeflate"
@@ -1582,7 +1582,7 @@ dependencies = [
 [[package]]
 name = "misa-actuator"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 dependencies = [
  "log",
  "thiserror 2.0.21",
@@ -1591,7 +1591,7 @@ dependencies = [
 [[package]]
 name = "misa-can"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 dependencies = [
  "embedded-can",
  "log",
@@ -2461,7 +2461,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "robstride-driver"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 dependencies = [
  "log",
  "misa-actuator",
@@ -2473,7 +2473,7 @@ dependencies = [
 [[package]]
 name = "robstride-protocol"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-actuator.git#144d1905e2e1d1f7b8bf9eef91f768711d1ad910"
+source = "git+https://github.com/takarakasai/misa-actuator.git#acd186f3b7b1319867a61255855d5a787a3bf632"
 
 [[package]]
 name = "robust"
@@ -2530,7 +2530,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3302,7 +3302,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

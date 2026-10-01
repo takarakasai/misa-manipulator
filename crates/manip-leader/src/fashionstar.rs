@@ -54,6 +54,11 @@ pub struct LeaderSection {
     /// Reset the multi-turn counter to 0 at startup.
     #[serde(default = "yes")]
     pub reset_multi_turn: bool,
+    /// Servos per sync-monitor request. The Star Arm 102's CH340 hub drops
+    /// bytes from the 4th reply on in a single request (25-35 % at 1 Mbps,
+    /// measured 2026-10-02), so read in groups of 3 (3+3+1: 95 Hz, none lost).
+    #[serde(default = "default_sync_group")]
+    pub sync_group: usize,
 }
 
 fn default_baud() -> u32 {
@@ -64,6 +69,9 @@ fn default_rate() -> f64 {
 }
 fn default_timeout() -> u64 {
     10
+}
+fn default_sync_group() -> usize {
+    3
 }
 fn yes() -> bool {
     true
@@ -129,6 +137,7 @@ pub struct FashionStarLeader {
     names: Vec<String>,
     last: Vec<f64>,
     missing: u64,
+    sync_group: usize,
 }
 
 impl FashionStarLeader {
@@ -161,6 +170,7 @@ impl FashionStarLeader {
             names,
             last: vec![f64::NAN; n],
             missing: 0,
+            sync_group: p.leader.sync_group,
         })
     }
 
@@ -168,7 +178,7 @@ impl FashionStarLeader {
     pub fn read_raw(&mut self) -> Result<Vec<Option<f64>>, LeaderError> {
         let m = self
             .bus
-            .sync_monitor(&self.ids)
+            .sync_monitor_chunked(&self.ids, self.sync_group)
             .map_err(|e| LeaderError::Read(e.to_string()))?;
         Ok(m.into_iter().map(|x| x.map(|x| x.angle_rad as f64)).collect())
     }
