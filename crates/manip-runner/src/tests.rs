@@ -657,7 +657,6 @@ fn joint_guard_prevents_self_collision() {
         .map(|k| sc.min_distance(&arm, &cols.iter().map(|c| c[k]).collect::<Vec<_>>()))
         .fold(f64::INFINITY, f64::min);
     eprintln!("closest approach while tracking: {dmin:.4} m");
-    }
     assert!(dmin > 0.0, "links touched: {dmin:.4}");
 }
 
