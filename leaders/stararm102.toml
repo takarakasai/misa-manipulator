@@ -1,12 +1,13 @@
 # Star Arm 102 (LD) / Seeed reBot Arm 102 — 7x FashionStar UART bus servos.
 #
 # Output is in the neutral space (same convention as LeRobot's action; joint names are LeRobot's).
-# **Not yet verified on real hardware** (2026-09-27). Where the values come from:
+# Verified on real hardware 2026-10-03 (this unit, teleoperating the sim B601-DM).
+# Where the values come from:
 # - Servo IDs: Seeed lerobot-teleoperator-rebot-arm-102 (0..6 = pan..gripper)
 # - sign / scale: joint_directions of upstream LeRobot `rebot_102_leader`
 #   (pan −1, lift −1, elbow +1, wrist_flex +1, yaw +1, roll −1, gripper −6).
-#   Some versions of Seeed's standalone plugin have no signs; **which is correct is unconfirmed**.
-#   Verify by moving one axis at a time with `manip run ... --plant sim --source leader`.
+#   Some versions of Seeed's standalone plugin have no signs; these signs were confirmed
+#   2026-10-03 by moving one axis at a time with `manip run ... --plant sim --source leader --viewer`.
 # - range: LeRobot joint range of the follower (B601-DM) [deg].
 # - offset_deg: measured 2026-10-02 with `manip leader --zero` on this unit
 #   (all within ±2.6°: the servos were zeroed at the factory, the rest is how
