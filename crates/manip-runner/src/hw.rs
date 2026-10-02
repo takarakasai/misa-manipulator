@@ -94,10 +94,15 @@ pub fn monitor(plant: &mut dyn Plant, arm: &ArmModel, dur: Duration) -> Result<(
 /// rotates the TCP about. Joints outside the TCP chain (the gripper) are told
 /// "toward the upper limit".
 pub fn positive_hint(arm: &ArmModel, q: &[f64], i: usize) -> String {
+    move_hint(arm, q, i, 1.0)
+}
+
+/// Like [`positive_hint`], for the direction `dir` (+1 model-positive, -1 negative).
+pub fn move_hint(arm: &ArmModel, q: &[f64], i: usize, dir: f64) -> String {
     let s = arm.evaluate(q, &vec![0.0; q.len()]);
     let col = s.tcp_jacobian.column(i);
-    let lin = nalgebra::Vector3::new(col[3], col[4], col[5]);
-    let ang = nalgebra::Vector3::new(col[0], col[1], col[2]);
+    let lin = nalgebra::Vector3::new(col[3], col[4], col[5]) * dir;
+    let ang = nalgebra::Vector3::new(col[0], col[1], col[2]) * dir;
     let axis = |v: &nalgebra::Vector3<f64>| {
         let k = v.iamax();
         let sign = if v[k] >= 0.0 { "+" } else { "-" };
@@ -108,10 +113,20 @@ pub fn positive_hint(arm: &ArmModel, q: &[f64], i: usize) -> String {
         format!("so the gripper tip moves toward {} (world)", axis(&lin))
     } else if ang.norm() > 0.5 {
         format!("so the gripper turns about {} (world, right hand rule)", axis(&ang))
-    } else {
+    } else if dir > 0.0 {
         let (hi, u) = display(d, d.q_max);
         format!("toward its upper limit ({hi:.2}{u}; for a gripper finger that is usually 'open')")
+    } else {
+        let (lo, u) = display(d, d.q_min);
+        format!("toward its lower limit ({lo:.2}{u}; for a gripper finger that is usually 'closed')")
     }
+}
+
+/// Direction (+1 / -1) to ask the operator to move a joint at `q`: positive,
+/// unless the joint sits within `room` of its upper limit (the folded rest
+/// pose puts the B601's joint2/joint3 exactly there) and has more room below.
+pub fn test_direction(q: f64, q_min: f64, q_max: f64, room: f64) -> f64 {
+    if q_max - q < room && q - q_min > q_max - q { -1.0 } else { 1.0 }
 }
 
 /// Verdict for one joint from the angle change seen after the operator moved
@@ -130,12 +145,13 @@ pub fn sign_check(plant: &mut dyn Plant, arm: &ArmModel, timeout: Duration) -> R
     for (i, d) in arm.dofs().iter().enumerate() {
         let q: Vec<f64> = obs.axes().iter().map(|a| a.position_rad).collect();
         let threshold = if d.kind == manip_model::DofKind::Prismatic { 0.003 } else { 5f64.to_radians() };
-        eprintln!("\n[{}] move it by hand {}", d.name, positive_hint(arm, &q, i));
+        let dir = test_direction(q[i], d.q_min, d.q_max, 3.0 * threshold);
+        eprintln!("\n[{}] move it by hand {}", d.name, move_hint(arm, &q, i, dir));
         let start = q[i];
         let t0 = Instant::now();
         let verdict = loop {
             plant.exchange(&idle, &mut obs)?;
-            if let Some(v) = sign_verdict(obs.axes()[i].position_rad - start, threshold) {
+            if let Some(v) = sign_verdict((obs.axes()[i].position_rad - start) * dir, threshold) {
                 break Some(v);
             }
             if t0.elapsed() > timeout {

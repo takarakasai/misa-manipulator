@@ -417,6 +417,26 @@ fn sign_hints_are_mirrored_between_dm_and_rs() {
 }
 
 
+/// At the folded rest pose the B601's joint2/joint3 sit on their upper limit,
+/// where the positive hint cannot be followed: `hw sign` asks for the
+/// negative direction there, described as the mirror of the positive hint.
+#[test]
+fn sign_check_asks_for_the_free_direction_at_a_limit() {
+    let (_, dm) = robot("rebot_b601_dm");
+    let q = vec![0.0; dm.n()];
+    for name in ["joint2", "joint3"] {
+        let i = dm.dof(name).unwrap();
+        let d = &dm.dofs()[i];
+        assert_eq!(crate::hw::test_direction(q[i], d.q_min, d.q_max, 0.26), -1.0, "{name}");
+        let flip = |h: &str| h.replace('+', "?").replace('-', "+").replace('?', "-");
+        assert_eq!(crate::hw::move_hint(&dm, &q, i, -1.0), flip(&crate::hw::positive_hint(&dm, &q, i)), "{name}");
+    }
+    // Mid-range joints keep the positive direction.
+    let i = dm.dof("joint1").unwrap();
+    let d = &dm.dofs()[i];
+    assert_eq!(crate::hw::test_direction(q[i], d.q_min, d.q_max, 0.26), 1.0);
+}
+
 /// Friction identification recovers the simulated plant's friction (rigid
 /// plant with the hardware effects), and --write puts it into the profile.
 #[test]
