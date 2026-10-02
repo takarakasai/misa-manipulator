@@ -80,6 +80,10 @@ kd = 0.8
 hold_kp = 18.0
 hold_kd = 2.0
 gravity_kd = 0.1
+# The URDF wrist is ~11 % heavy: measured on the DM arm at [pose.ready] (hold
+# and gravity mode, 2026-10-03) and by Seeed on an RS arm (k = 0.885,
+# reBotArm_control_py docs/gravity_calibration_rs_2026-07-17.md).
+gravity_scale = 0.885
 v_max = 4.0
 a_max = 25.0
 armature = 0.003

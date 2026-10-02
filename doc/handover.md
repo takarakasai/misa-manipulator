@@ -237,7 +237,7 @@ RS も同様（OSC 5.54 → 1.53 mm）。
 
 ---
 
-## 5. 実機の立ち上げ手順（案、未実施）
+## 5. 実機の立ち上げ手順（B601-DM で 6 まで実施、2026-10-03）
 
 **電源はすぐ切れるようにしておく。** DAMIAO は disable 後も次のフレームで再通電
 しうる（misa-actuator の handover §2）。各手順は `--plant virtual-can` で**先に
@@ -267,6 +267,25 @@ RS も同様（OSC 5.54 → 1.53 mm）。
 9. 摩擦の同定: `manip hw ... friction`（肩肘手首を順に往復、約 2 分）。結果を
    見て妥当なら `--write` で `friction` / `viscous` に書き戻す。グリッパの
    `ratio`（m/rad）は開閉の端で指の変位を測って直す。
+
+**B601-DM での結果（2026-10-03）。** Seeed の reBot-B601-Agent-Guide に沿って
+motorbridge で ID（1–7 / Master 0x11–0x17）とゼロ点（Motorbridge Studio、畳んだ
+姿勢）を書いたあと、PCAN-USB Pro FD の can0（クラシック 1 Mbps）で実施。
+
+- 3. `scan`: 全軸 `ok`、畳んだ姿勢で ±0.6° 以内。バスの実効は **503–523 Hz**
+  （§3 の見積もり 466 Hz より速い）。
+- 4. `sign`: 全軸 OK（プロファイルの符号のまま）。畳んだ姿勢では joint2/joint3
+  が上限にいて正方向へ回せないので、`sign` は上限付近では負方向を案内する。
+- 5. `jog joint2`: 問題なし。
+- 保持（`--mode hold --record`）: 畳んだ姿勢では肩肘が 0.2–0.4°、手首が 1.5°
+  ストッパーから浮く（接触なので重力の調整には使わない）。`[pose.ready]` では
+  重力 FF の誤差が j2 −5 %、j3 ≈ 0、j4 +11 %。
+- 6. 重力補償: 手首が勝手に流れた（+15° → −21°）ので joint4 に
+  `gravity_scale = 0.885`。Seeed が RS で接触なしに測った値
+  （reBotArm_control_py `docs/gravity_calibration_rs_2026-07-17.md`: j2 0.948、
+  j3 0.952、j4 0.885、クーロン摩擦 0.3–0.5 N·m）と一致。これで手首は −16°〜+29°
+  のどこで離しても止まる。`end_link`（グリッパ）の質量 0.5 kg は仮置きらしい。
+- ステータス行の tcp は実測。Park 途中の値は最終姿勢ではない（CSV で見る）。
 
 ---
 

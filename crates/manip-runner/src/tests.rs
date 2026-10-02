@@ -441,7 +441,10 @@ fn sign_check_asks_for_the_free_direction_at_a_limit() {
 /// plant with the hardware effects), and --write puts it into the profile.
 #[test]
 fn friction_sweep_recovers_the_plant() {
-    let (p, arm) = robot("rebot_b601_dm");
+    let (mut p, arm) = robot("rebot_b601_dm");
+    // The rigid plant's gravity is the unscaled model; a profile gravity_scale
+    // (fitted to the real arm) would be a model mismatch this test is not about.
+    p.joint.iter_mut().for_each(|j| j.gravity_scale = 1.0);
     let dofs = vec![arm.dof("joint1").unwrap(), arm.dof("joint4").unwrap()];
     let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
     let truth: Vec<(f64, f64)> = assemble::joints_in_order(&p, &arm)
