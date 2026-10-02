@@ -27,6 +27,7 @@ log = { workspace = true }
 env_logger = { workspace = true }
 clap = { workspace = true }
 ctrlc = { workspace = true }
+libc = { workspace = true }
 # MuJoCo (`--features sim`). Not a workspace member (see the root Cargo.toml).
 manip-plant-mujoco = { path = "../manip-plant-mujoco", optional = true }
 

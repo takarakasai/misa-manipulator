@@ -93,6 +93,7 @@ pub fn monitor(plant: &mut dyn Plant, arm: &ArmModel, dur: Duration) -> Result<(
 /// velocity if the joint moves the TCP noticeably, otherwise the axis it
 /// rotates the TCP about. Joints outside the TCP chain (the gripper) are told
 /// "toward the upper limit".
+#[cfg(test)]
 pub fn positive_hint(arm: &ArmModel, q: &[f64], i: usize) -> String {
     move_hint(arm, q, i, 1.0)
 }

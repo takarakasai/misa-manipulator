@@ -42,6 +42,11 @@ use crate::supervisor::Mode;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Run under SCHED_FIFO at this priority (1–99), inherited by the bus and
+    /// leader threads. Needs CAP_SYS_NICE on the binary or an rtprio limit
+    /// (`/etc/security/limits.d`); `chrt` cannot pass the binary's capability on.
+    #[arg(long, global = true)]
+    rt_priority: Option<i32>,
 }
 
 #[derive(Subcommand)]
@@ -215,10 +220,35 @@ fn main() {
     // Replay re-runs every mode transition; keep its output to the verdict.
     let level = if matches!(cli.cmd, Cmd::Replay { .. }) { "warn" } else { "info" };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level)).init();
+    if let Some(prio) = cli.rt_priority {
+        if let Err(e) = set_realtime(prio) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
     if let Err(e) = real_main(cli) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// SCHED_FIFO for this thread; threads spawned afterwards inherit it.
+fn set_realtime(prio: i32) -> Result<(), String> {
+    if !(1..=99).contains(&prio) {
+        return Err(format!("--rt-priority {prio}: must be 1..=99"));
+    }
+    let param = libc::sched_param { sched_priority: prio };
+    // SAFETY: plain syscall on the calling thread with a valid sched_param.
+    if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) } != 0 {
+        let e = std::io::Error::last_os_error();
+        return Err(format!(
+            "--rt-priority {prio}: {e}. Give the binary CAP_SYS_NICE \
+             (`sudo setcap cap_sys_nice+ep target/release/manip`, lost on every rebuild) \
+             or the user an rtprio limit in /etc/security/limits.d (new login)"
+        ));
+    }
+    log::info!("running under SCHED_FIFO priority {prio}");
+    Ok(())
 }
 
 fn real_main(cli: Cli) -> Result<(), String> {

@@ -301,7 +301,11 @@ motorbridge で ID（1–7 / Master 0x11–0x17）とゼロ点（Motorbridge Stu
   補償がぴったりでも静止摩擦のぶん 2 mm）。箱は摩擦ぶんの余裕を持たせて決めること。
   床・天井の回帰テストは同定前の軽い摩擦で走らせている（`light_friction`）。
 - 実時間: 他のジョブで load 44 のとき 1 tick 2 ms を越える間隔が 270 回 / 15 s 出た
-  （CAN のエラーは 0）。
+  （CAN のエラーは 0）。`manip --rt-priority 80 ...` で SCHED_FIFO（バス・リーダーの
+  スレッドも継承）。権限は `sudo setcap cap_sys_nice+ep target/release/manip`（ビルドの
+  たびに消える）か `/etc/security/limits.d/99-realtime.conf`（`takara - rtprio 90`、
+  2026-10-03 に設定済み、新しいログインから有効。VS Code のリモートサーバは作り直しが
+  要る）。`chrt` はバイナリの capability を引き継げないので使えない。
 
 ---
 
