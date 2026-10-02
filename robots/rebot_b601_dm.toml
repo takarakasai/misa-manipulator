@@ -40,8 +40,8 @@ a_max = 15.0
 armature = 0.02
 max_torque_rate = 400.0
 sim_damping = 0.5
-sim_friction = 0.3
-friction = 0.3
+sim_friction = 0.91
+friction = 0.73
 
 [[joint]]
 name = "joint2"
@@ -55,8 +55,8 @@ a_max = 15.0
 armature = 0.02
 max_torque_rate = 400.0
 sim_damping = 0.5
-sim_friction = 0.3
-friction = 0.3
+sim_friction = 1.75
+friction = 1.4
 
 [[joint]]
 name = "joint3"
@@ -70,8 +70,8 @@ a_max = 15.0
 armature = 0.02
 max_torque_rate = 400.0
 sim_damping = 0.5
-sim_friction = 0.3
-friction = 0.3
+sim_friction = 1.75
+friction = 1.4
 
 [[joint]]
 name = "joint4"
@@ -89,8 +89,8 @@ a_max = 25.0
 armature = 0.003
 max_torque_rate = 150.0
 sim_damping = 0.1
-sim_friction = 0.08
-friction = 0.08
+sim_friction = 0.22
+friction = 0.17
 
 [[joint]]
 name = "joint5"
@@ -104,8 +104,8 @@ a_max = 25.0
 armature = 0.003
 max_torque_rate = 150.0
 sim_damping = 0.1
-sim_friction = 0.08
-friction = 0.08
+sim_friction = 0.13
+friction = 0.1
 
 [[joint]]
 name = "joint6"
@@ -119,8 +119,8 @@ a_max = 25.0
 armature = 0.003
 max_torque_rate = 150.0
 sim_damping = 0.1
-sim_friction = 0.08
-friction = 0.08
+sim_friction = 0.15
+friction = 0.12
 
 # Gripper (in the model: displacement [m] of one finger; the other is a mimic).
 # Gains and inertia are in model units (N/m, kg), hence the large magnitudes. On the
@@ -160,7 +160,7 @@ joint4 = 0.3
 # (up to 4 mm), so the guard would stop the wrist where the parts clear.
 [safety]
 box_min = [-0.50, -0.80, 0.03]
-box_max = [0.85, 0.80, 0.95]
+box_max = [0.85, 0.80, 0.50]  # bench: ceiling protrusion above the fingertip, lowest at 0.55 m (2026-10-03)
 points = [{ link = "link3" }, { link = "link5" }]
 self_collision = true
 collision_margin = 0.005
