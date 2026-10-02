@@ -220,11 +220,9 @@ fn main() {
     // Replay re-runs every mode transition; keep its output to the verdict.
     let level = if matches!(cli.cmd, Cmd::Replay { .. }) { "warn" } else { "info" };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level)).init();
-    if let Some(prio) = cli.rt_priority {
-        if let Err(e) = set_realtime(prio) {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
+    if let Err(e) = cli.rt_priority.map_or(Ok(()), set_realtime) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
     }
     if let Err(e) = real_main(cli) {
         eprintln!("error: {e}");
