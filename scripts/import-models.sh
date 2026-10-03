@@ -21,12 +21,12 @@ git -C "$SRC" checkout -q "$REV"
 cargo build --release -q -p manip-tools
 D="$SRC/Rebot_Arm_description"
 
-# DM: finger travel is set to the reBotArm_control_py value (0.0285 m).
-# DevArm's 0.05 m is from an older revision. Which one matches the real hardware
-# is unconfirmed (see README).
+# DM: finger travel 0.05 m per finger (DevArm's value), measured on the real arm
+# 2026-10-03: the fingers open 0 -> ~100 mm apart. reBotArm_control_py's
+# 0.0285 m does not match the hardware.
 rm -rf models/rebot_b601_dm
 ./target/release/manip-import "$D/DM/urdf/ReBot_Arm_DM.urdf" models/rebot_b601_dm \
-  --name rebot_b601_dm --visual-tris 3000 --finger-travel 0.0285
+  --name rebot_b601_dm --visual-tris 3000 --finger-travel 0.05
 
 # RS: the URDF models the two fingers as independent prismatic joints, but the real gripper has one motor.
 rm -rf models/rebot_b601_rs
