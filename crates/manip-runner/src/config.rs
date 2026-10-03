@@ -137,6 +137,13 @@ pub struct JointSection {
     /// Gravity term scale (an escape hatch for model-vs-hardware mismatch).
     #[serde(default = "one")]
     pub gravity_scale: f64,
+    /// Motor-side PD in OSC around the integrated QP solution (MIT kp / kd).
+    /// Defaults: kp 0, kd `[osc] motor_kd`. Feedback closed only in the 500 Hz
+    /// PC loop chattered on the real arm; motor-side damping removes it.
+    #[serde(default)]
+    pub osc_kp: Option<f64>,
+    #[serde(default)]
+    pub osc_kd: Option<f64>,
     /// Joint damping in the sim [N·m·s/rad].
     #[serde(default)]
     pub sim_damping: f64,
@@ -181,9 +188,13 @@ pub struct OscSection {
     pub a_max: f64,
     #[serde(default = "d10")]
     pub cbf_alpha: f64,
-    /// Damping added on the motor side (same for all axes).
+    /// Damping added on the motor side (joints without `osc_kd`).
     #[serde(default)]
     pub motor_kd: f64,
+    /// How far the integrated OSC reference may lead the measured joint [rad]
+    /// (bounds the motor-side `osc_kp` torque when the arm is held back).
+    #[serde(default = "d003")]
+    pub motor_lead_max: f64,
     /// TCP reference shaping (translation m/s, m/s²; rotation rad/s, rad/s²).
     #[serde(default = "d03")]
     pub lin_v_max: f64,
@@ -234,6 +245,7 @@ fn d25() -> f64 { 25.0 }
 fn d10() -> f64 { 10.0 }
 fn d50() -> f64 { 50.0 }
 fn d03() -> f64 { 0.3 }
+fn d003() -> f64 { 0.03 }
 fn d2() -> f64 { 2.0 }
 fn d15() -> f64 { 1.5 }
 fn d8() -> f64 { 8.0 }

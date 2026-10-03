@@ -300,6 +300,12 @@ motorbridge で ID（1–7 / Master 0x11–0x17）とゼロ点（Motorbridge Stu
 - **重い摩擦で OSC の箱は 1 cm ほど越える**（シム: 補償 0.8 で 1.0 cm、補償なしで 2.4 cm、
   補償がぴったりでも静止摩擦のぶん 2 mm）。箱は摩擦ぶんの余裕を持たせて決めること。
   床・天井の回帰テストは同定前の軽い摩擦で走らせている（`light_friction`）。
+- **OSC を実機で（2026-10-03）**: トルクだけ（MIT kp = kd = 0）の OSC は約 30 Hz で
+  チャタリングした（指令トルクが 2 ms ごとに ±数 N·m、手首の速度が 1 rad/s 揺れる。
+  シムでは再現しない）。摩擦補償を切っても残る。モータ側の PD で止まる:
+  `[[joint]] osc_kp / osc_kd`（QP 解を積分した目標のまわり、`[osc] motor_lead_max`
+  で実測から 0.03 rad 以内）。肩肘 kp 30 / kd 3、手首 kp 8 / kd 2（手首 kd 0.8 では
+  揺れが残る）で、半径 3 cm の円が rms 3.6 mm（トルクだけで 8.2 mm、最大 25 mm）。
 - 実時間: 他のジョブで load 44 のとき 1 tick 2 ms を越える間隔が 270 回 / 15 s 出た
   （CAN のエラーは 0）。`manip --rt-priority 80 ...` で SCHED_FIFO（バス・リーダーの
   スレッドも継承）。権限は `sudo setcap cap_sys_nice+ep target/release/manip`（ビルドの

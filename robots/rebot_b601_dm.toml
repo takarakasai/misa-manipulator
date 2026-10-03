@@ -24,12 +24,17 @@ max_observation_age_s = 0.05
 park_speed_scale = 0.3
 park_tolerance = 0.05
 
-# ── Joints (all independent DOFs of the model) ──────────────────────────
+# ── Joints (all independent DOFs of the model)
+# osc_kp / osc_kd: motor-side PD while in OSC, around the integrated QP solution.
+# Torque-only OSC chattered at ~30 Hz on the real arm (2026-10-03); with these the
+# 3 cm circle tracks at 3.6 mm rms (was 8.2) and the jitter is gone. ──────────────────────────
 # kp/kd go to the motor's MIT mode (in model units). Seeed's default holding
 # gains are 120/8 for shoulder/elbow and 18/2 for the wrist. Teleop tracking
 # starts softer than that.
 [[joint]]
 name = "joint1"
+osc_kp = 30.0
+osc_kd = 3.0
 kp = 60.0
 kd = 3.0
 hold_kp = 120.0
@@ -45,6 +50,8 @@ friction = 0.73
 
 [[joint]]
 name = "joint2"
+osc_kp = 30.0
+osc_kd = 3.0
 kp = 60.0
 kd = 3.0
 hold_kp = 120.0
@@ -60,6 +67,8 @@ friction = 1.4
 
 [[joint]]
 name = "joint3"
+osc_kp = 30.0
+osc_kd = 3.0
 kp = 60.0
 kd = 3.0
 hold_kp = 120.0
@@ -75,6 +84,8 @@ friction = 1.4
 
 [[joint]]
 name = "joint4"
+osc_kp = 8.0
+osc_kd = 2.0
 kp = 15.0
 kd = 0.8
 hold_kp = 18.0
@@ -94,6 +105,8 @@ friction = 0.17
 
 [[joint]]
 name = "joint5"
+osc_kp = 8.0
+osc_kd = 2.0
 kp = 15.0
 kd = 0.8
 hold_kp = 18.0
@@ -109,6 +122,8 @@ friction = 0.1
 
 [[joint]]
 name = "joint6"
+osc_kp = 8.0
+osc_kd = 2.0
 kp = 15.0
 kd = 0.8
 hold_kp = 18.0

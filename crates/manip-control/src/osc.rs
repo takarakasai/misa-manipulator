@@ -16,9 +16,14 @@
 //!
 //! # Output
 //!
-//! `τ` goes out as `τff` with `kp = 0`. If `motor_kd > 0`, motor-side damping
-//! is added with `v = v + q̈·dt` as the target velocity (it doesn't act on
-//! motion that follows the QP solution, only suppresses high-frequency jitter).
+//! `τ` goes out as `τff`. If `motor_kd > 0`, motor-side damping is added with
+//! `v = v + q̈·dt` as the target velocity (it doesn't act on motion that
+//! follows the QP solution, only suppresses high-frequency jitter). If
+//! `motor_kp > 0`, the target position is the QP solution integrated since
+//! entering OSC, kept within `motor_lead_max` of the measured joint, so the
+//! motor's own PD holds the arm on the solved motion between PC cycles. On
+//! the real B601-DM, OSC with feedback only in the 500 Hz PC loop chattered
+//! at ~30 Hz; motor-side damping removed most of it.
 //!
 //! # Only DOFs on the TCP chain are solved
 //!
@@ -116,6 +121,10 @@ pub struct OscConfig {
     pub v_scale: f64,
     /// Damping added on the motor side [N·m·s/rad].
     pub motor_kd: DVector<f64>,
+    /// Motor-side stiffness around the integrated QP solution [N·m/rad].
+    pub motor_kp: DVector<f64>,
+    /// Bound on |integrated reference − measured| [rad].
+    pub motor_lead_max: f64,
     /// Joint damping blended into the TCP task near singularities (an
     /// acceleration-level DLS).
     ///
@@ -156,6 +165,8 @@ impl OscConfig {
             cbf_alpha_v: 20.0,
             v_scale: 1.0,
             motor_kd: DVector::zeros(n),
+            motor_kp: DVector::zeros(n),
+            motor_lead_max: 0.03,
             sing_sigma_lo: 0.01,
             sing_sigma_hi: 0.06,
             sing_lambda_sq: 1e-2,
@@ -205,6 +216,8 @@ pub struct OscReport {
 pub struct Osc {
     pub cfg: OscConfig,
     solver: Solver,
+    /// Integrated QP solution (TCP-chain DOFs) for the motor-side `motor_kp`.
+    q_ref: Option<DVector<f64>>,
 }
 
 impl Osc {
@@ -212,12 +225,14 @@ impl Osc {
         Self {
             cfg,
             solver: Solver::new(),
+            q_ref: None,
         }
     }
 
-    /// Discards the warm start (on mode switches).
+    /// Discards the warm start and the integrated reference (on mode switches).
     pub fn reset(&mut self) {
         self.solver.reset();
+        self.q_ref = None;
     }
 
     /// `base` is a command for all DOFs (joint impedance, etc.). Only the DOFs
@@ -273,6 +288,8 @@ impl Osc {
         let posture_kd = pick(&c.posture_kd);
         let a_max = pick(&c.a_max);
         let motor_kd = pick(&c.motor_kd);
+        let motor_kp = pick(&c.motor_kp);
+        let lead_max = c.motor_lead_max;
 
         let tau_max = DVector::from_iterator(
             n,
@@ -376,13 +393,25 @@ impl Osc {
             residual[r] = a_task[k] - achieved[k];
         }
 
+        let v_next = &s.v + &ex.qddot * dt;
+        let q_target = if motor_kp.iter().any(|&k| k > 0.0) {
+            let prev = self.q_ref.take().filter(|q| q.len() == n).unwrap_or_else(|| s.q.clone());
+            let q_next = DVector::from_iterator(
+                n,
+                (0..n).map(|k| (prev[k] + v_next[k] * dt).clamp(s.q[k] - lead_max, s.q[k] + lead_max)),
+            );
+            self.q_ref = Some(q_next.clone());
+            q_next
+        } else {
+            s.q.clone()
+        };
         let mut cmd = base;
         assert_eq!(cmd.len(), arm.n(), "base length differs from the number of independent DOFs");
         for (k, &i) in idx.iter().enumerate() {
             cmd.axes[i] = AxisCmd {
-                q: s.q[k],
-                v: s.v[k] + ex.qddot[k] * dt,
-                kp: 0.0,
+                q: q_target[k],
+                v: v_next[k],
+                kp: motor_kp[k],
                 kd: motor_kd[k],
                 tau: tau[k],
             };

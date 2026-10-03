@@ -120,7 +120,10 @@ pub fn osc_config(p: &RobotProfile, arm: &ArmModel) -> Result<OscConfig, String>
     c.torque_scale = o.torque_scale;
     c.a_max = DVector::from_element(n, o.a_max);
     c.cbf_alpha = o.cbf_alpha;
-    c.motor_kd = DVector::from_element(n, o.motor_kd);
+    let js = joints_in_order(p, arm);
+    c.motor_kd = col(&js, |j| j.osc_kd.unwrap_or(o.motor_kd));
+    c.motor_kp = col(&js, |j| j.osc_kp.unwrap_or(0.0));
+    c.motor_lead_max = o.motor_lead_max;
     c.friction = friction_model(p, arm, o.friction_v_eps);
     c.solve.backend = match o.backend.as_str() {
         "active_set" => misa_wbc::QpSolver::ActiveSet,

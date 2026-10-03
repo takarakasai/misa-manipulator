@@ -600,6 +600,29 @@ fn no_safety(t: String) -> String {
     format!("{}{}", &t[..i], &t[j..])
 }
 
+/// OSC with the profile's motor-side PD (`osc_kp` / `osc_kd`, around the
+/// integrated QP solution) tracks the circle at least as well as torque-only
+/// OSC and holds still. On the real arm torque-only OSC chattered at ~30 Hz.
+#[test]
+fn osc_with_motor_pd_tracks_and_holds() {
+    let torque_only = |t: String| {
+        t.lines()
+            .filter(|l| !l.starts_with("osc_kp = ") && !l.starts_with("osc_kd = "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        std::fs::read_to_string(root().join("robots/rebot_b601_dm.toml")).unwrap().contains("\nosc_kp = "),
+        "the profile is expected to set osc_kp"
+    );
+    let (err_tau, _) = osc_run_with(torque_only, "circle", "pd-off");
+    let (err_pd, _) = osc_run_with(|t| t, "circle", "pd-on");
+    eprintln!("osc rms: torque only {:.2} mm, motor PD {:.2} mm", err_tau * 1e3, err_pd * 1e3);
+    assert!(err_pd < 1.1 * err_tau, "motor PD {err_pd} vs torque only {err_tau}");
+    let (_, vmax_hold) = osc_run_with(|t| t, "none", "pd-hold");
+    assert!(vmax_hold < 0.01, "static hold moves: |v| max {vmax_hold}");
+}
+
 /// The pre-identification friction (0.3 N·m shoulder/elbow, 0.08 N·m wrist),
 /// exactly compensated. The barrier tests check the barrier itself: with the
 /// friction identified on the arm (1.75 / 0.22 N·m) stick-slip carries the TCP
