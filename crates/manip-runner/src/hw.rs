@@ -32,6 +32,23 @@ pub fn read_passive(plant: &mut dyn Plant, n: usize, dur: Duration) -> Result<Ob
 }
 
 /// One line per joint: responded, angle, range check. Returns whether all passed.
+/// How far past a limit a joint may read and still pass `scan`: an arm resting
+/// on its stops compresses them a little (the B601-DM shoulder reads +0.14° at
+/// the folded pose). Zero or sign mistakes show up as degrees to tens of degrees.
+pub fn stop_tolerance(d: &manip_model::Dof) -> f64 {
+    match d.kind {
+        manip_model::DofKind::Revolute => 1f64.to_radians(),
+        manip_model::DofKind::Prismatic => 1e-3,
+    }
+}
+
+/// `scan` verdict for a valid reading: `Ok(None)` inside the range,
+/// `Ok(Some(past))` within [`stop_tolerance`] past a limit, `Err(())` beyond.
+pub fn range_verdict(d: &manip_model::Dof, q: f64) -> Result<Option<f64>, ()> {
+    let past = if q > d.q_max { q - d.q_max } else if q < d.q_min { q - d.q_min } else { return Ok(None) };
+    if past.abs() <= stop_tolerance(d) { Ok(Some(past)) } else { Err(()) }
+}
+
 pub fn scan(plant: &mut dyn Plant, arm: &ArmModel) -> Result<bool, String> {
     let obs = read_passive(plant, arm.n(), Duration::from_millis(500))?;
     let mut ok = true;
@@ -43,12 +60,19 @@ pub fn scan(plant: &mut dyn Plant, arm: &ArmModel) -> Result<bool, String> {
         let (hi, _) = display(d, d.q_max);
         let verdict = if !a.health.valid {
             ok = false;
-            "NO REPLY (check id / wiring / power)"
-        } else if !d.within(a.position_rad) {
-            ok = false;
-            "OUT OF RANGE (check zero / sign in [hardware])"
+            "NO REPLY (check id / wiring / power)".to_string()
         } else {
-            "ok"
+            match range_verdict(d, a.position_rad) {
+                Ok(None) => "ok".to_string(),
+                Ok(Some(past)) => {
+                    let (p, u) = display(d, past);
+                    format!("ok (on the stop, {p:+.2}{} past the limit)", u.trim())
+                }
+                Err(()) => {
+                    ok = false;
+                    "OUT OF RANGE (check zero / sign in [hardware])".to_string()
+                }
+            }
         };
         let reply = if a.health.valid { format!("{:.0}ms", a.health.age.as_secs_f64() * 1e3) } else { "-".into() };
         println!(

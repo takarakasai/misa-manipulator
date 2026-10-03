@@ -623,6 +623,21 @@ fn osc_with_motor_pd_tracks_and_holds() {
     assert!(vmax_hold < 0.01, "static hold moves: |v| max {vmax_hold}");
 }
 
+/// `hw scan` accepts a joint resting slightly past its limit on the stop
+/// (the B601-DM shoulder at +0.14° when folded) but not a zero/sign error.
+#[test]
+fn scan_tolerates_resting_on_a_stop() {
+    let (_, arm) = robot("rebot_b601_dm");
+    let j2 = &arm.dofs()[arm.dof("joint2").unwrap()];
+    let finger = &arm.dofs()[arm.dof("finger_left").unwrap()];
+    assert_eq!(crate::hw::range_verdict(j2, -0.5), Ok(None));
+    let past = crate::hw::range_verdict(j2, j2.q_max + 0.14f64.to_radians()).unwrap().unwrap();
+    assert!((past - 0.14f64.to_radians()).abs() < 1e-12);
+    assert_eq!(crate::hw::range_verdict(j2, j2.q_max + 5f64.to_radians()), Err(()));
+    assert!(crate::hw::range_verdict(finger, finger.q_max + 0.0005).unwrap().is_some());
+    assert_eq!(crate::hw::range_verdict(finger, finger.q_min - 0.003), Err(()));
+}
+
 /// The pre-identification friction (0.3 N·m shoulder/elbow, 0.08 N·m wrist),
 /// exactly compensated. The barrier tests check the barrier itself: with the
 /// friction identified on the arm (1.75 / 0.22 N·m) stick-slip carries the TCP
