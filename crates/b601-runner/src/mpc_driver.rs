@@ -93,6 +93,9 @@ pub struct MpcDriver {
     period: f64,
     next_t: f64,
     reset_next: bool,
+    /// The planner's distance from the joint limits (joint targets are
+    /// clamped by it before they become TCP goals).
+    pub q_margin: f64,
     pub plans: u64,
     pub failures: u64,
     pub last_report: Option<MpcReport>,
@@ -100,6 +103,7 @@ pub struct MpcDriver {
 
 impl MpcDriver {
     pub fn new(planner: Box<dyn Planner + Send>, arm: &ArmModel, rate_hz: f64, synchronous: bool) -> Self {
+        let q_margin = planner.q_margin();
         let exec = if synchronous {
             Exec::Sync { planner, arm: Box::new(arm.clone()) }
         } else {
@@ -124,6 +128,7 @@ impl MpcDriver {
             period: 1.0 / rate_hz.max(1e-3),
             next_t: f64::NEG_INFINITY,
             reset_next: true,
+            q_margin,
             plans: 0,
             failures: 0,
             last_report: None,

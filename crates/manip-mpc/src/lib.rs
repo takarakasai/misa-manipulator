@@ -78,4 +78,26 @@ pub trait Planner {
     fn plan(&mut self, arm: &ArmModel, q: &[f64], v: &[f64], t: f64, goal: &MpcGoal) -> Result<(JointPlan, MpcReport), MpcError>;
     /// Forget the warm start (on mode switches).
     fn reset(&mut self);
+    /// Distance the plan keeps from the joint limits [rad].
+    fn q_margin(&self) -> f64;
+}
+
+/// A joint-space target moved inside the range a planner aims for (the
+/// TCP-chain DOFs clamped to the limits less `margin`; other DOFs unchanged).
+///
+/// A TCP goal computed from a joint target on or past a limit is out of reach
+/// of a planner that keeps `margin` away from it. On the real B601-DM, the
+/// leader folded at joint2 = joint3 = 0 (their upper limits) left a 5 mm
+/// residual, and the planner chased it by reshaping the arm: a 2 Hz, ±1°
+/// swing on joint2 / joint4 at rest.
+pub fn reachable_joint_target(arm: &ArmModel, q: &DVector<f64>, margin: f64) -> DVector<f64> {
+    let mut out = q.clone();
+    for i in arm.tcp_chain() {
+        let d = &arm.dofs()[i];
+        let (lo, hi) = (d.q_min + margin, d.q_max - margin);
+        if lo <= hi {
+            out[i] = out[i].clamp(lo, hi);
+        }
+    }
+    out
 }

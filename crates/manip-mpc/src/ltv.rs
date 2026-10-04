@@ -306,6 +306,10 @@ impl LtvMpc {
 }
 
 impl Planner for LtvMpc {
+    fn q_margin(&self) -> f64 {
+        self.cfg.q_margin
+    }
+
     fn reset(&mut self) {
         self.prev = None;
         self.workspace = QpWorkspace::new();

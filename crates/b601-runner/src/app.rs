@@ -57,7 +57,9 @@ impl Source {
     /// advance and previewed; anything else is held fixed over the horizon).
     /// Without a target it holds `hold` (the pose when Mpc started): aiming at
     /// the current pose would let the arm drift (each plan accepts where it is).
-    fn goal_spec(&self, arm: &ArmModel, target: &Target, hold: &(Isometry3<f64>, DVector<f64>)) -> crate::mpc_driver::GoalSpec {
+    /// `q_margin`: the planner's distance from the joint limits (a joint
+    /// target is clamped by it first, so its TCP pose is reachable).
+    fn goal_spec(&self, arm: &ArmModel, target: &Target, hold: &(Isometry3<f64>, DVector<f64>), q_margin: f64) -> crate::mpc_driver::GoalSpec {
         use crate::mpc_driver::GoalSpec;
         match (self, target) {
             (Source::Circle { radius, freq_hz, start: Some(p0) }, Target::Tcp { posture, .. }) => GoalSpec::Circle {
@@ -67,10 +69,10 @@ impl Source {
                 posture: posture.clone(),
             },
             (_, Target::Tcp { pose, posture }) => GoalSpec::Fixed { pose: *pose, posture: posture.clone() },
-            (_, Target::Joint(q)) => GoalSpec::Fixed {
-                pose: arm.tcp_pose(q.as_slice()),
-                posture: q.clone(),
-            },
+            (_, Target::Joint(q)) => {
+                let q = manip_mpc::reachable_joint_target(arm, q, q_margin);
+                GoalSpec::Fixed { pose: arm.tcp_pose(q.as_slice()), posture: q }
+            }
             (_, Target::None) => GoalSpec::Fixed { pose: hold.0, posture: hold.1.clone() },
         }
     }
@@ -391,7 +393,8 @@ pub fn run(
                     mpc_hold = Some((s.tcp_pose, s.q.clone()));
                 }
                 let hold = mpc_hold.as_ref().expect("set on entry");
-                d.poll(policy.time(), s.q.as_slice(), s.v.as_slice(), || source.goal_spec(arm, &target, hold))
+                let q_margin = d.q_margin;
+                d.poll(policy.time(), s.q.as_slice(), s.v.as_slice(), || source.goal_spec(arm, &target, hold, q_margin))
             }
             _ => {
                 mpc_hold = None;

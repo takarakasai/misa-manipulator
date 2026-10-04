@@ -363,3 +363,37 @@ fn ilqr_keeps_near_workspace_floor() {
     eprintln!("ilqr floor {floor:.4}, min z {:.4}", r.min_point_z);
     assert!(r.min_point_z > floor - 0.005, "went through the floor: {} < {floor}", r.min_point_z);
 }
+
+/// Real B601-DM at rest with the leader folded: the leader's joint target is
+/// on / past the joint2 and joint3 upper limits (0). Its TCP pose is out of
+/// reach of a planner that keeps `q_margin` from the limits; planning toward
+/// it started every plan by dipping joint2 (a 2 Hz swing on the real arm).
+/// Clamped by `reachable_joint_target`, the plan just settles.
+#[test]
+fn folded_leader_target_is_clamped_into_reach() {
+    let arm = model();
+    let n = arm.n();
+    let deg = |x: [f64; 6], grip: f64| DVector::from_iterator(n, x.iter().map(|d| d.to_radians()).chain([grip]));
+    let leader = deg([1.20, 0.04, 0.00, -0.10, 0.40, -1.19], 0.0023);
+    let q = deg([1.20, -1.21, -1.08, -0.05, 0.40, -1.19], 0.0023);
+    let v = vec![0.0; n];
+    let mut mpc = IlqrMpc::new(IlqrConfig::defaults());
+    let margin = mpc.q_margin();
+    let first_acc = |mpc: &mut IlqrMpc, target: &DVector<f64>| {
+        let pose = arm.tcp_pose(target.as_slice());
+        let tcp = move |_t: f64| pose;
+        mpc.reset();
+        let (plan, _) = mpc.plan(&arm, q.as_slice(), &v, 0.0, &MpcGoal { tcp: &tcp, posture: Some(target) }).unwrap();
+        plan.a[0].clone()
+    };
+    let clamped = manip_mpc::reachable_joint_target(&arm, &leader, margin);
+    assert!((clamped[1] - (-margin)).abs() < 1e-12 && (clamped[2] - (-margin)).abs() < 1e-12);
+    assert_eq!(clamped[6], leader[6], "the gripper is not clamped");
+    let raw = first_acc(&mut mpc, &leader);
+    let fixed = first_acc(&mut mpc, &clamped);
+    println!("first knot q̈ [rad/s²]: raw {:?} clamped {:?}", raw.as_slice(), fixed.as_slice());
+    // Unclamped: joint2 down at ~2 rad/s² and joint4 up at ~4 while already
+    // within 0.1° of the reachable goal.
+    assert!(raw[1] < -1.0 && raw.amax() > 3.0, "the dip this guards against is gone? ({raw:?})");
+    assert!(fixed.amax() < 1.0 && fixed[1] > 0.0, "clamped target: a small move toward it ({fixed:?})");
+}

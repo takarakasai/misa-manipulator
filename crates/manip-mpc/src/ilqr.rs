@@ -373,6 +373,10 @@ fn rollout(p: &Problem, q0: &DVector<f64>, v0: &DVector<f64>, u_of: &mut Policy)
 }
 
 impl Planner for IlqrMpc {
+    fn q_margin(&self) -> f64 {
+        self.cfg.q_margin
+    }
+
     fn reset(&mut self) {
         self.prev = None;
         self.mu = self.cfg.mu0;
