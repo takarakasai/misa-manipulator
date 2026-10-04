@@ -60,7 +60,7 @@ enum Cmd {
         plant: PlantKind,
         #[arg(long, value_enum, default_value_t = SourceKind::None)]
         source: SourceKind,
-        /// Leader profile (`--source leader`).
+        /// Leader profile (`--source leader`), or run log (`--source log`).
         #[arg(long)]
         leader: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = Mode::Joint)]
@@ -214,6 +214,9 @@ enum SourceKind {
     Sine,
     Circle,
     Leader,
+    /// The targets of a run log (`--leader <run.mlog>`), cycle by cycle: a
+    /// real teleop session replayed against a simulated plant.
+    Log,
 }
 
 fn main() {
@@ -477,6 +480,14 @@ fn make_source(
             freq_hz: freq,
             start: None,
         },
+        SourceKind::Log => {
+            let path = leader.ok_or("--source log requires --leader <run.mlog>")?;
+            let (_, frames) = crate::replay::read_log(path)?;
+            Source::Recorded {
+                targets: frames.iter().map(|f| (&f.target).into()).collect(),
+                dt: 1.0 / profile.control.rate_hz,
+            }
+        }
         SourceKind::Leader => {
             let path = leader.ok_or("--source leader requires --leader <profile>")?;
             let (thread, _) = open_leader(path)?;

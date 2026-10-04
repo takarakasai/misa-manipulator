@@ -24,8 +24,20 @@ use nalgebra::{DVector, Isometry3, Translation3, Vector3};
 /// the horizon.
 #[derive(Debug, Clone)]
 pub enum GoalSpec {
-    /// A fixed TCP pose (leader, synthetic targets): no preview.
+    /// A fixed TCP pose (TCP targets, holding): no preview.
     Fixed { pose: Isometry3<f64>, posture: DVector<f64> },
+    /// A joint target (leader, synthetic) moving at `qdot` from `t0` for at
+    /// most `lookahead` seconds, then held; clamped into the planner's range
+    /// (`q_margin`) so every pose on the way is reachable.
+    Moving {
+        q: DVector<f64>,
+        qdot: DVector<f64>,
+        t0: f64,
+        lookahead: f64,
+        q_margin: f64,
+        /// The held end (also the posture).
+        end: DVector<f64>,
+    },
     /// `--source circle`: known in advance, so the planner previews it.
     Circle {
         p0: Isometry3<f64>,
@@ -36,16 +48,29 @@ pub enum GoalSpec {
 }
 
 impl GoalSpec {
-    pub fn pose_at(&self, t: f64) -> Isometry3<f64> {
+    pub fn moving(arm: &ArmModel, q: &DVector<f64>, qdot: &DVector<f64>, t0: f64, lookahead: f64, q_margin: f64) -> Self {
+        let end = manip_mpc::reachable_joint_target(arm, &(q + qdot * lookahead), q_margin);
+        GoalSpec::Moving { q: q.clone(), qdot: qdot.clone(), t0, lookahead, q_margin, end }
+    }
+
+    pub fn pose_at(&self, arm: &ArmModel, t: f64) -> Isometry3<f64> {
         match self {
             GoalSpec::Fixed { pose, .. } => *pose,
             GoalSpec::Circle { p0, radius, freq_hz, .. } => circle_pose(p0, *radius, *freq_hz, t),
+            GoalSpec::Moving { q, qdot, t0, lookahead, q_margin, end } => {
+                let s = (t - t0).clamp(0.0, *lookahead);
+                if s >= *lookahead {
+                    return arm.tcp_pose(end.as_slice());
+                }
+                arm.tcp_pose(manip_mpc::reachable_joint_target(arm, &(q + qdot * s), *q_margin).as_slice())
+            }
         }
     }
 
     fn posture(&self) -> &DVector<f64> {
         match self {
             GoalSpec::Fixed { posture, .. } | GoalSpec::Circle { posture, .. } => posture,
+            GoalSpec::Moving { end, .. } => end,
         }
     }
 }
@@ -72,14 +97,14 @@ fn plan_once(planner: &mut dyn Planner, arm: &ArmModel, job: &Job) -> PlanResult
         planner.reset();
     }
     if log::log_enabled!(log::Level::Trace) {
-        let p0 = job.goal.pose_at(job.t).translation.vector;
-        let p1 = job.goal.pose_at(job.t + 1.0).translation.vector;
+        let p0 = job.goal.pose_at(arm, job.t).translation.vector;
+        let p1 = job.goal.pose_at(arm, job.t + 1.0).translation.vector;
         log::trace!(
             "job t={:.3} q={:?} v={:?} goal now [{:.3} {:.3} {:.3}] +1s [{:.3} {:.3} {:.3}] tcp [{:?}] posture {:?}",
             job.t, job.q, job.v, p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, arm.tcp_pose(&job.q).translation.vector.as_slice(), job.goal.posture().as_slice()
         );
     }
-    let tcp = |t: f64| job.goal.pose_at(t);
+    let tcp = |t: f64| job.goal.pose_at(arm, t);
     planner.plan(arm, &job.q, &job.v, job.t, &MpcGoal { tcp: &tcp, posture: Some(job.goal.posture()) })
 }
 

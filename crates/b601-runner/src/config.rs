@@ -70,6 +70,14 @@ pub struct MpcSection {
     /// Hold if the newest plan is older than this [s] (planner stalled).
     #[serde(default = "d05")]
     pub plan_timeout_s: f64,
+    /// Joint targets (leader) are extrapolated at their estimated velocity for
+    /// up to this long over the horizon [s]; 0 = held fixed (each plan
+    /// arrives and stops). Not yet shown to help on the real arm.
+    #[serde(default)]
+    pub target_lookahead_s: f64,
+    /// Low-pass time constant of that velocity estimate [s].
+    #[serde(default = "d005")]
+    pub target_v_tau_s: f64,
 }
 
 impl Default for MpcSection {
@@ -82,6 +90,8 @@ impl Default for MpcSection {
             track_omega: 20.0,
             tcp_v_max: 0.3,
             plan_timeout_s: 0.5,
+            target_lookahead_s: 0.0,
+            target_v_tau_s: 0.05,
         }
     }
 }
@@ -96,6 +106,10 @@ fn d20() -> f64 {
 
 fn d05() -> f64 {
     0.5
+}
+
+fn d005() -> f64 {
+    0.05
 }
 
 #[derive(Debug, Clone, Deserialize)]

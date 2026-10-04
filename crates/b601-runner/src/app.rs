@@ -29,6 +29,31 @@ use crate::record::Recorder;
 use crate::replay::{self, LogWriter};
 use crate::supervisor::{Mode, Target};
 
+/// Velocity of a joint target (leader), low-passed finite differences.
+#[derive(Debug, Default)]
+pub struct TargetRate {
+    last: Option<DVector<f64>>,
+    pub qdot: Option<DVector<f64>>,
+}
+
+impl TargetRate {
+    pub fn update(&mut self, target: &Target, dt: f64, tau: f64) {
+        let Target::Joint(q) = target else {
+            *self = Self::default();
+            return;
+        };
+        if let Some(last) = &self.last
+            && last.len() == q.len()
+        {
+            let raw = (q - last) / dt;
+            let k = dt / (tau.max(0.0) + dt);
+            let v = self.qdot.get_or_insert_with(|| DVector::zeros(q.len()));
+            *v += (raw - &*v) * k;
+        }
+        self.last = Some(q.clone());
+    }
+}
+
 /// Where the target comes from.
 pub enum Source {
     None,
@@ -44,6 +69,8 @@ pub enum Source {
     /// Move one joint by `delta` and back (raised cosine over `period_s`),
     /// then hold where it started. For bring-up (`manip hw jog`).
     Jog { dof: usize, delta: f64, period_s: f64, start: Option<(f64, DVector<f64>)> },
+    /// Targets recorded in a run log, one per cycle (`--source log`).
+    Recorded { targets: Vec<Target>, dt: f64 },
     Leader {
         thread: LeaderThread,
         mapping: TeleopMapping,
@@ -58,8 +85,19 @@ impl Source {
     /// Without a target it holds `hold` (the pose when Mpc started): aiming at
     /// the current pose would let the arm drift (each plan accepts where it is).
     /// `q_margin`: the planner's distance from the joint limits (a joint
-    /// target is clamped by it first, so its TCP pose is reachable).
-    fn goal_spec(&self, arm: &ArmModel, target: &Target, hold: &(Isometry3<f64>, DVector<f64>), q_margin: f64) -> crate::mpc_driver::GoalSpec {
+    /// target is clamped by it first, so its TCP pose is reachable). A joint
+    /// target moves on at `rate`'s velocity for `lookahead` seconds from `t`.
+    #[allow(clippy::too_many_arguments)]
+    fn goal_spec(
+        &self,
+        arm: &ArmModel,
+        target: &Target,
+        hold: &(Isometry3<f64>, DVector<f64>),
+        q_margin: f64,
+        rate: &TargetRate,
+        t: f64,
+        lookahead: f64,
+    ) -> crate::mpc_driver::GoalSpec {
         use crate::mpc_driver::GoalSpec;
         match (self, target) {
             (Source::Circle { radius, freq_hz, start: Some(p0) }, Target::Tcp { posture, .. }) => GoalSpec::Circle {
@@ -70,8 +108,8 @@ impl Source {
             },
             (_, Target::Tcp { pose, posture }) => GoalSpec::Fixed { pose: *pose, posture: posture.clone() },
             (_, Target::Joint(q)) => {
-                let q = manip_mpc::reachable_joint_target(arm, q, q_margin);
-                GoalSpec::Fixed { pose: arm.tcp_pose(q.as_slice()), posture: q }
+                let zero = DVector::zeros(q.len());
+                GoalSpec::moving(arm, q, rate.qdot.as_ref().unwrap_or(&zero), t, lookahead, q_margin)
             }
             (_, Target::None) => GoalSpec::Fixed { pose: hold.0, posture: hold.1.clone() },
         }
@@ -108,6 +146,10 @@ impl Source {
                 q[*dof] += *delta * 0.5 * (1.0 - (std::f64::consts::TAU * tau).cos());
                 let _ = arm;
                 Target::Joint(q)
+            }
+            Source::Recorded { targets, dt } => {
+                let k = ((t / *dt).round().max(0.0) as usize).min(targets.len().saturating_sub(1));
+                targets.get(k).cloned().unwrap_or(Target::None)
             }
             Source::Leader { thread, mapping, timeout, last_seq } => match thread.latest() {
                 Some(sample) if sample.at.elapsed() <= *timeout => {
@@ -296,6 +338,7 @@ pub fn run(
     };
     // TCP pose and posture when Mpc started (the goal without a target).
     let mut mpc_hold: Option<(Isometry3<f64>, DVector<f64>)> = None;
+    let mut target_rate = TargetRate::default();
     let mut rec = match &opts.record {
         Some(p) => Some(Recorder::create(p, arm).map_err(|e| e.to_string())?),
         None => None,
@@ -391,10 +434,14 @@ pub fn run(
                 if requests.contains(&Mode::Mpc) || mpc_hold.is_none() {
                     d.restart();
                     mpc_hold = Some((s.tcp_pose, s.q.clone()));
+                    target_rate = TargetRate::default();
                 }
+                target_rate.update(&target, dt, profile.mpc.target_v_tau_s);
                 let hold = mpc_hold.as_ref().expect("set on entry");
-                let q_margin = d.q_margin;
-                d.poll(policy.time(), s.q.as_slice(), s.v.as_slice(), || source.goal_spec(arm, &target, hold, q_margin))
+                let (q_margin, now, ahead) = (d.q_margin, policy.time(), profile.mpc.target_lookahead_s);
+                d.poll(now, s.q.as_slice(), s.v.as_slice(), || {
+                    source.goal_spec(arm, &target, hold, q_margin, &target_rate, now, ahead)
+                })
             }
             _ => {
                 mpc_hold = None;
