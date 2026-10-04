@@ -971,3 +971,18 @@ fn log_format_1_is_still_read() {
     assert!(frames[0].plan.is_none());
     assert_eq!(frames[0].requests, vec![Mode::Hold]);
 }
+
+/// Without a target, Mpc holds the TCP where it started (an earlier version
+/// aimed every plan at the current pose and let the real arm drift 9 cm).
+#[test]
+fn mpc_mode_without_target_holds_the_tcp() {
+    let none = |_: &RobotProfile, _: &manip_model::ArmModel| Source::None;
+    let (h, r, _) = run_rigid_csv(with_planner("ltv"), none, Mode::Mpc, 6.0, "mpc-hold");
+    let xyz: Vec<Vec<f64>> = ["tcp_x", "tcp_y", "tcp_z"].iter().map(|c| col_f(&h, &r, c, "Mpc")).collect();
+    let spread = (0..xyz[0].len())
+        .map(|k| (0..3).map(|i| (xyz[i][k] - xyz[i][0]).powi(2)).sum::<f64>().sqrt())
+        .fold(0.0, f64::max);
+    eprintln!("Mpc hold: TCP spread {:.2} mm over {} ticks", spread * 1e3, xyz[0].len());
+    assert!(xyz[0].len() > 1000);
+    assert!(spread < 3e-3, "TCP drifted {spread}");
+}

@@ -55,7 +55,9 @@ pub enum Source {
 impl Source {
     /// What the MPC aims at for this cycle's `target` (the circle is known in
     /// advance and previewed; anything else is held fixed over the horizon).
-    fn goal_spec(&self, arm: &ArmModel, target: &Target, s: &ArmState) -> crate::mpc_driver::GoalSpec {
+    /// Without a target it holds `hold` (the pose when Mpc started): aiming at
+    /// the current pose would let the arm drift (each plan accepts where it is).
+    fn goal_spec(&self, arm: &ArmModel, target: &Target, hold: &(Isometry3<f64>, DVector<f64>)) -> crate::mpc_driver::GoalSpec {
         use crate::mpc_driver::GoalSpec;
         match (self, target) {
             (Source::Circle { radius, freq_hz, start: Some(p0) }, Target::Tcp { posture, .. }) => GoalSpec::Circle {
@@ -69,7 +71,7 @@ impl Source {
                 pose: arm.tcp_pose(q.as_slice()),
                 posture: q.clone(),
             },
-            (_, Target::None) => GoalSpec::Fixed { pose: s.tcp_pose, posture: s.q.clone() },
+            (_, Target::None) => GoalSpec::Fixed { pose: hold.0, posture: hold.1.clone() },
         }
     }
 
@@ -290,6 +292,8 @@ pub fn run(
     } else {
         None
     };
+    // TCP pose and posture when Mpc started (the goal without a target).
+    let mut mpc_hold: Option<(Isometry3<f64>, DVector<f64>)> = None;
     let mut rec = match &opts.record {
         Some(p) => Some(Recorder::create(p, arm).map_err(|e| e.to_string())?),
         None => None,
@@ -382,12 +386,17 @@ pub fn run(
         };
         let plan = match mpc.as_mut() {
             Some(d) if pending == Mode::Mpc => {
-                if requests.contains(&Mode::Mpc) {
+                if requests.contains(&Mode::Mpc) || mpc_hold.is_none() {
                     d.restart();
+                    mpc_hold = Some((s.tcp_pose, s.q.clone()));
                 }
-                d.poll(policy.time(), s.q.as_slice(), s.v.as_slice(), || source.goal_spec(arm, &target, &s))
+                let hold = mpc_hold.as_ref().expect("set on entry");
+                d.poll(policy.time(), s.q.as_slice(), s.v.as_slice(), || source.goal_spec(arm, &target, hold))
             }
-            _ => None,
+            _ => {
+                mpc_hold = None;
+                None
+            }
         };
         let out = policy.step(arm, &obs, &requests, &target, plan.as_ref());
         if let Some(tr) = &out.info.transition {
