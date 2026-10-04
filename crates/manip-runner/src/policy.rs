@@ -10,7 +10,8 @@
 
 use std::time::Duration;
 
-use manip_control::{JointCommand, Osc};
+use manip_control::JointCommand;
+use manip_wbc::Osc;
 use manip_model::{ArmModel, ArmState};
 use misa_core::{AxisCommand, AxisId, Command, ControlMode, Observation, SafetyGate, SafetyVerdict};
 use nalgebra::DVector;

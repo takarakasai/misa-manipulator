@@ -1,0 +1,22 @@
+# manip-wbc — whole-body control (hierarchical QP) for fixed-base arms. No I/O.
+#
+# Building blocks (state restricted to the TCP chain, task builders on
+# misa-wbc's Dynamics, MIT-command output) and the controllers built from
+# them: OSC (TCP target) and joint-trajectory tracking (e.g. an MPC plan).
+[package]
+name = "manip-wbc"
+description = "Whole-body control for arms on misa-wbc's hierarchical QP: task builders, OSC, joint-trajectory tracking. No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+manip-model = { workspace = true }
+manip-control = { workspace = true }
+misa-wbc = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

@@ -27,10 +27,8 @@
 //! in place). When the leader returns, the reference moves from where it stopped
 //! toward the leader within the speed limit.
 
-use manip_control::{
-    JointCommand, JointGains, JointImpedance, JointRef, JointShaper, Osc, OscReport,
-    ShaperLimits, TcpRef, TcpShaper,
-};
+use manip_control::{JointCommand, JointGains, JointImpedance, JointRef, JointShaper, ShaperLimits, TcpShaper};
+use manip_wbc::{Osc, OscReport, TcpRef};
 use manip_model::{ArmModel, ArmState};
 use nalgebra::{DVector, Isometry3};
 

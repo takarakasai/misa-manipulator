@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 manip-model = { workspace = true }
 manip-control = { workspace = true }
+manip-wbc = { workspace = true }
 manip-leader = { workspace = true }
 manip-plant-can = { workspace = true }
 misa-wbc = { workspace = true }

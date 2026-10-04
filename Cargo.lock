@@ -1439,7 +1439,6 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "manip-model",
- "misa-wbc",
  "misarta-formats",
  "nalgebra",
  "serde",
@@ -1506,6 +1505,7 @@ dependencies = [
  "manip-model",
  "manip-plant-can",
  "manip-plant-mujoco",
+ "manip-wbc",
  "misa-actuator",
  "misa-core",
  "misa-wbc",
@@ -1524,6 +1524,18 @@ dependencies = [
  "misarta",
  "misarta-formats",
  "nalgebra",
+]
+
+[[package]]
+name = "manip-wbc"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "manip-control",
+ "manip-model",
+ "misa-wbc",
+ "nalgebra",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

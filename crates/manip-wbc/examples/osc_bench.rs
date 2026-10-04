@@ -8,7 +8,8 @@
 //! ```
 use std::time::Instant;
 
-use manip_control::{Feedforward, JointGains, JointImpedance, JointRef, Osc, OscConfig, TcpRef};
+use manip_control::{Feedforward, JointGains, JointImpedance, JointRef};
+use manip_wbc::{Osc, OscConfig, TcpRef};
 use manip_model::{ArmModel, TcpSpec};
 use misa_wbc::dynamics::Formulation;
 use misa_wbc::QpSolver;

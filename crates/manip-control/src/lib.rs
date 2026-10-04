@@ -7,7 +7,7 @@
 //!        │ q_ref, v_ref, a_ref           │
 //!        ▼                               ▼
 //!   ┌─────────── Controller ─────────────────┐
-//!   │ GravityComp / JointImpedance / Osc     │
+//!   │ GravityComp / JointImpedance           │
 //!   └────────────────────────────────────────┘
 //!        │ per-axis MIT command (q, v, kp, kd, τff)
 //!        ▼
@@ -20,8 +20,8 @@
 //! With our cycle (a few hundred Hz) plus CAN round-trip latency, closing the
 //! same stiffness in torque adds phase lag from the delay and tends to
 //! oscillate. The model (gravity, inertia, Coriolis) goes into `τff` as
-//! **feedforward**, which is harmless even when delayed. Only OSC builds its
-//! stiffness in torque too, so start its gains conservatively.
+//! **feedforward**, which is harmless even when delayed. Torque-level
+//! controllers (OSC and the other whole-body controllers) live in manip-wbc.
 //!
 //! # Ordering and units
 //!
@@ -33,12 +33,10 @@ pub mod command;
 pub mod friction;
 pub mod gains;
 pub mod joint;
-pub mod osc;
 pub mod shaper;
 
 pub use command::{AxisCmd, JointCommand};
 pub use friction::FrictionModel;
 pub use gains::JointGains;
 pub use joint::{Feedforward, JointImpedance};
-pub use osc::{Cbf, Osc, OscConfig, OscError, OscReport, TcpRef};
 pub use shaper::{JointRef, JointShaper, ShaperLimits, TcpShaper, TcpShaperLimits};

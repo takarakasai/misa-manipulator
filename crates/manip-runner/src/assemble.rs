@@ -4,7 +4,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use manip_control::{JointGains, OscConfig, ShaperLimits, TcpShaperLimits};
+use manip_control::{JointGains, ShaperLimits, TcpShaperLimits};
+use manip_wbc::OscConfig;
 use manip_model::ArmModel;
 use misa_core::{AxisLimits, SafetyConfig};
 use nalgebra::DVector;

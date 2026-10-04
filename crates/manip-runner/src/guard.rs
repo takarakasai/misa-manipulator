@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use manip_control::Cbf;
+use manip_wbc::Cbf;
 use manip_model::collision::{PairDistance, SelfCollision};
 use manip_model::{ArmModel, ArmState};
 use nalgebra::{DVector, Vector3};
