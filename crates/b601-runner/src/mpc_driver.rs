@@ -232,6 +232,19 @@ impl MpcDriver {
             }
         };
         match out {
+            Some(Ok((_, report))) if report.tcp_pos_err_end > report.tcp_pos_err_now + 0.02 => {
+                // A plan that ends farther from the goal than the arm is now
+                // is not a plan (on the real B601-DM such plans started a
+                // violent runaway). Drop it; the supervisor holds if no fresh
+                // plan follows.
+                self.failures += 1;
+                log::warn!(
+                    "MPC plan rejected: predicted TCP error {:.3} m at the end vs {:.3} m now",
+                    report.tcp_pos_err_end,
+                    report.tcp_pos_err_now
+                );
+                None
+            }
             Some(Ok((plan, report))) => {
                 self.plans += 1;
                 log::debug!("plan t0={:.3}: {report:?}", plan.t0);

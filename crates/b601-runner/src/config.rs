@@ -68,7 +68,7 @@ pub struct MpcSection {
     #[serde(default = "d03")]
     pub tcp_v_max: f64,
     /// Hold if the newest plan is older than this [s] (planner stalled).
-    #[serde(default = "d05")]
+    #[serde(default = "d015")]
     pub plan_timeout_s: f64,
     /// Joint targets (leader) are extrapolated at their estimated velocity for
     /// up to this long over the horizon [s]; 0 = held fixed (each plan
@@ -106,7 +106,7 @@ impl Default for MpcSection {
             dt: 0.0,
             track_omega: 20.0,
             tcp_v_max: 0.3,
-            plan_timeout_s: 0.5,
+            plan_timeout_s: 0.15,
             target_lookahead_s: 0.0,
             target_v_tau_s: 0.05,
             replan_from_reference: Vec::new(),
@@ -125,8 +125,8 @@ fn d20() -> f64 {
     20.0
 }
 
-fn d05() -> f64 {
-    0.5
+fn d015() -> f64 {
+    0.15
 }
 
 fn d005() -> f64 {

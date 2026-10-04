@@ -46,9 +46,14 @@ pub struct LtvConfig {
     pub w_pos: f64,
     pub w_rot: f64,
     pub track_orientation: bool,
-    /// Cap on the TCP error seen by one plan [m], [rad] (a trust region: a far
-    /// target is approached through nearer ones, which keeps the
-    /// linearization valid and the QP's active set small).
+    /// How far from the current TCP one plan aims [m], [rad] (a trust region:
+    /// a far target is approached through nearer ones, which keeps the
+    /// linearization valid and the QP's active set small). The goal is
+    /// moved toward the current pose, not the error clamped per knot: the
+    /// knots of the nominal trajectory (coasting at the measured velocity)
+    /// can be far from the goal even when the arm is close, and a clamped
+    /// error there under-states what the step must correct (on the real
+    /// B601-DM a 0.7 rad/s wrist start sent plans 25° off the goal).
     pub e_max_pos: f64,
     pub e_max_rot: f64,
     /// TCP translational speed limit per axis [m/s] (`|J̄v·v_k| ≤ tcp_v_max`,
@@ -111,7 +116,7 @@ impl LtvConfig {
             torque_scale: 0.9,
             torque_limits: true,
             workspace: None,
-            sqp_iters: 1,
+            sqp_iters: 3,
             qp: QpConfig {
                 solver: QpSolver::ActiveSet,
                 max_iters: 2000,
@@ -249,19 +254,14 @@ fn solve(
 }
 
 /// Scale the translation / rotation parts of a pose error down to the caps.
-fn clamp_error(e: nalgebra::Vector6<f64>, max_pos: f64, max_rot: f64) -> nalgebra::Vector6<f64> {
-    let mut e = e;
-    let r = e.fixed_rows::<3>(0).norm();
-    if r > max_rot {
-        let k = max_rot / r;
-        e.fixed_rows_mut::<3>(0).scale_mut(k);
-    }
-    let p = e.fixed_rows::<3>(3).norm();
-    if p > max_pos {
-        let k = max_pos / p;
-        e.fixed_rows_mut::<3>(3).scale_mut(k);
-    }
-    e
+/// `goal`, moved toward `from` so that it is at most `max_pos` / `max_rot` away.
+fn toward(goal: Isometry3<f64>, from: &Isometry3<f64>, max_pos: f64, max_rot: f64) -> Isometry3<f64> {
+    let dp = goal.translation.vector - from.translation.vector;
+    let p = if dp.norm() > max_pos { from.translation.vector + dp * (max_pos / dp.norm()) } else { goal.translation.vector };
+    let dr = goal.rotation * from.rotation.inverse();
+    let angle = dr.angle();
+    let r = if angle > max_rot { dr.powf(max_rot / angle) * from.rotation } else { goal.rotation };
+    Isometry3::from_parts(nalgebra::Translation3::from(p), r)
 }
 
 fn select_cols(m: &DMatrix<f64>, idx: &[usize]) -> DMatrix<f64> {
@@ -383,6 +383,61 @@ impl Planner for LtvMpc {
         let mut relaxed = false;
         let mut cost_value = 0.0;
         let mut status = String::new();
+        // Merit of an input sequence on the nonlinear kinematics (the QP's
+        // terms, plus range and speed violations): an SQP step is taken only
+        // as far as it lowers it. Unchecked, steps re-linearized around a bad
+        // solution ran away on the real B601-DM (plans ending 60° from the
+        // goal, the arm shaking violently with the leader still).
+        let tcp_now = arm.tcp_pose(q_all);
+        let aim: Vec<Isometry3<f64>> = (0..=nh)
+            .map(|k| toward((goal.tcp)(t + k as f64 * h), &tcp_now, cfg.e_max_pos, cfg.e_max_rot))
+            .collect();
+        let rows_m: std::ops::Range<usize> = if cfg.track_orientation { 0..6 } else { 3..6 };
+        // Workspace points and their box, widened to where they are now (as in the QP).
+        let ws_pos = |qf: &[f64]| -> Vec<Vector3<f64>> {
+            cfg.workspace
+                .as_ref()
+                .map(|ws| {
+                    ws.points
+                        .iter()
+                        .filter_map(|(link, local)| arm.link_pose(qf, link).ok().map(|x| (x * nalgebra::Point3::from(*local)).coords))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let ws_now = ws_pos(q_all);
+        let merit = |u: &DVector<f64>| -> f64 {
+            let (qn, vn) = cond.rollout(u);
+            let mut m = cfg.w_acc * u.norm_squared();
+            let mut qf = q_all.to_vec();
+            for k in 1..=nh {
+                let term = if k == nh { cfg.terminal_scale } else { 1.0 };
+                for (c, &i) in idx.iter().enumerate() {
+                    qf[i] = qn[k][c];
+                }
+                let e = pose_error(&aim[k], &arm.tcp_pose(&qf));
+                for r in rows_m.clone() {
+                    m += term * if r < 3 { cfg.w_rot } else { cfg.w_pos } * e[r] * e[r];
+                }
+                m += cfg.w_posture * (&qn[k] - &posture).norm_squared() + term * cfg.w_vel * vn[k].norm_squared();
+                if let Some(ws) = &cfg.workspace {
+                    for (i, p) in ws_pos(&qf).iter().enumerate() {
+                        let now = ws_now.get(i).copied().unwrap_or(*p);
+                        for r in 0..3 {
+                            let over = (p[r] - ws.max[r].max(now[r])).max(0.0) + (ws.min[r].min(now[r]) - p[r]).max(0.0);
+                            m += 1e6 * over * over;
+                        }
+                    }
+                }
+                for c in 0..n {
+                    let over_q = (qn[k][c] - q_hi[c]).max(0.0) + (q_lo[c] - qn[k][c]).max(0.0);
+                    let over_v = (vn[k][c].abs() - v_lim[c]).max(0.0);
+                    m += 1e6 * (over_q * over_q + over_v * over_v);
+                }
+            }
+            m
+        };
+        let mut merit_nom = merit(&u_nom);
         for _ in 0..cfg.sqp_iters.max(1) {
             let t_lin = std::time::Instant::now();
             let (qn, vn) = cond.rollout(&u_nom);
@@ -399,8 +454,7 @@ impl Planner for LtvMpc {
                 let term = if k == nh { cfg.terminal_scale } else { 1.0 };
                 if k >= 1 {
                     // TCP: e(q_k) ≈ ē − J̄(q_free + Gq·U − q̄)  →  ‖J̄·Gq·U − (ē − J̄(q_free − q̄))‖²
-                    let target = (goal.tcp)(t + k as f64 * h);
-                    let e = clamp_error(pose_error(&target, &kn.tcp), cfg.e_max_pos, cfg.e_max_rot);
+                    let e = pose_error(&aim[k], &kn.tcp);
                     let j = kn.jac.rows(rows.start, rows.len()).into_owned();
                     let a = &j * &cond.gq[k];
                     let e_rows = DVector::from_iterator(rows.len(), rows.clone().map(|r| e[r]));
@@ -477,7 +531,22 @@ impl Planner for LtvMpc {
                 return Err(MpcError::Solve(status));
             }
             cost_value = cost.value(&sol.x);
-            u_nom = sol.x;
+            let step = &sol.x - &u_nom;
+            let mut taken = false;
+            for alpha in [1.0, 0.5, 0.25] {
+                let cand = &u_nom + &step * alpha;
+                let m = merit(&cand);
+                if m < merit_nom {
+                    u_nom = cand;
+                    merit_nom = m;
+                    taken = true;
+                    break;
+                }
+            }
+            if !taken {
+                status = format!("{status} (step rejected)");
+                break;
+            }
         }
 
         let (q, v) = cond.rollout(&u_nom);

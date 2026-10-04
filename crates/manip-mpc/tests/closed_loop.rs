@@ -397,3 +397,26 @@ fn folded_leader_target_is_clamped_into_reach() {
     assert!(raw[1] < -1.0 && raw.amax() > 3.0, "the dip this guards against is gone? ({raw:?})");
     assert!(fixed.amax() < 1.0 && fixed[1] > 0.0, "clamped target: a small move toward it ({fixed:?})");
 }
+
+/// A plan started while a joint is still moving must head back to the goal.
+/// Clamping the per-knot TCP error of the coasting nominal (the old trust
+/// region) under-stated the correction: on the real B601-DM a 0.7 rad/s wrist
+/// start gave plans ending 25° from the goal, and the arm ran away.
+#[test]
+fn ltv_plan_from_a_moving_start_returns_to_the_goal() {
+    let arm = model();
+    let q0 = ready();
+    let goal = arm.tcp_pose(q0.as_slice());
+    let tcp = move |_t: f64| goal;
+    let mut v0 = vec![0.0; arm.n()];
+    v0[3] = 0.7;
+    v0[1] = -0.2;
+    // One linearization around the coasting nominal is not enough for such a
+    // start (20° off); the default three (line-searched) are.
+    let cfg = LtvConfig::defaults(arm.n());
+    assert_eq!(cfg.sqp_iters, 3);
+    let (plan, _) = LtvMpc::new(cfg).plan(&arm, q0.as_slice(), &v0, 0.0, &MpcGoal { tcp: &tcp, posture: Some(&q0) }).unwrap();
+    let end = plan.q.last().unwrap();
+    let dev = plan.idx.iter().enumerate().map(|(k, &i)| (end[k] - q0[i]).abs()).fold(0.0, f64::max);
+    assert!(dev < 0.05, "plan ends {:.1}° from the goal", dev.to_degrees());
+}

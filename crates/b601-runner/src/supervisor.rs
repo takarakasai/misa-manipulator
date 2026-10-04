@@ -311,8 +311,20 @@ impl Supervisor {
                 let pr = self.shaper.step(&posture, dt).clone();
                 let base = self.track.command(arm, s, &pr);
                 match self.plan.as_ref().filter(|p| now - p.t0 <= self.cfg.plan_timeout_s) {
+                    None if self.plan.is_some() => {
+                        // The planner stalled or its plans were rejected: stop
+                        // here (not back at the pose Mpc started from, which
+                        // can be far away by now) and stay stopped.
+                        info.transition = Some("Mpc → Hold: no fresh plan".into());
+                        log::warn!("MPC: no fresh plan for {:.0} ms, holding", self.cfg.plan_timeout_s * 1e3);
+                        self.mode = Mode::Hold;
+                        self.hold_q = s.q.clone();
+                        let r = JointRef::at_rest(self.hold_q.clone());
+                        info.reference = Some(r.clone());
+                        self.hold.command(arm, s, &r)
+                    }
                     None => {
-                        // No plan yet (or a stalled planner): hold where Mpc started.
+                        // No plan yet: hold where Mpc started.
                         let r = JointRef::at_rest(self.hold_q.clone());
                         info.reference = Some(r.clone());
                         let mut c = self.hold.command(arm, s, &r);
