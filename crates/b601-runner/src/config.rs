@@ -39,6 +39,63 @@ pub struct RobotProfile {
     /// Synthetic target (`--source sine`).
     #[serde(default)]
     pub sine: Vec<SineJoint>,
+    /// Model predictive control (`--mode mpc`).
+    #[serde(default)]
+    pub mpc: MpcSection,
+}
+
+/// `[mpc]`: a planner (manip-mpc) replanning at `rate_hz` on a worker thread,
+/// its joint plan tracked every cycle by manip-wbc's `JointTracking` (with the
+/// OSC's motor-side PD, safety barriers and solver settings from `[osc]`).
+/// The workspace box and points come from `[safety]`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MpcSection {
+    /// "ltv" (acceleration-level QP) or "ilqr" (torque-level).
+    #[serde(default = "default_planner")]
+    pub planner: String,
+    #[serde(default = "d50")]
+    pub rate_hz: f64,
+    /// Horizon (intervals) and interval [s]; 0 = the planner's default.
+    #[serde(default)]
+    pub horizon: usize,
+    #[serde(default)]
+    pub dt: f64,
+    /// Joint-trajectory tracking bandwidth of the WBC [rad/s] (Kp = ω², Kd = 2ω).
+    #[serde(default = "d20")]
+    pub track_omega: f64,
+    /// TCP speed limit [m/s].
+    #[serde(default = "d03")]
+    pub tcp_v_max: f64,
+    /// Hold if the newest plan is older than this [s] (planner stalled).
+    #[serde(default = "d05")]
+    pub plan_timeout_s: f64,
+}
+
+impl Default for MpcSection {
+    fn default() -> Self {
+        Self {
+            planner: default_planner(),
+            rate_hz: 50.0,
+            horizon: 0,
+            dt: 0.0,
+            track_omega: 20.0,
+            tcp_v_max: 0.3,
+            plan_timeout_s: 0.5,
+        }
+    }
+}
+
+fn default_planner() -> String {
+    "ltv".into()
+}
+
+fn d20() -> f64 {
+    20.0
+}
+
+fn d05() -> f64 {
+    0.5
 }
 
 #[derive(Debug, Clone, Deserialize)]

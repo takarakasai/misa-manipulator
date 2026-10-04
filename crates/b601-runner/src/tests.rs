@@ -843,3 +843,131 @@ fn dm_wrist_range_is_not_guarded() {
         }
     }
 }
+
+/// Profile text with an `[mpc]` planner selected.
+fn with_planner(planner: &'static str) -> impl Fn(String) -> String {
+    move |t: String| format!("{t}\n[mpc]\nplanner = \"{planner}\"\n")
+}
+
+/// Mpc mode (planner + joint-tracking WBC) follows a 3 cm circle better than
+/// the OSC does, with either planner, and never falls back to Hold.
+#[test]
+fn mpc_mode_tracks_circle_with_both_planners() {
+    let circle = |_: &RobotProfile, _: &manip_model::ArmModel| Source::Circle { radius: 0.03, freq_hz: 0.2, start: None };
+    for planner in ["ltv", "ilqr"] {
+        let (h, r, _) = run_rigid_csv(with_planner(planner), circle, Mode::Mpc, 8.0, &format!("mpc-{planner}"));
+        let m = h.iter().position(|x| x == "mode").unwrap();
+        let t = col_f(&h, &r, "t", "Mpc");
+        let refs: Vec<Vec<f64>> = ["ref_x", "ref_y", "ref_z"].iter().map(|c| col_f(&h, &r, c, "Mpc")).collect();
+        let tcp: Vec<Vec<f64>> = ["tcp_x", "tcp_y", "tcp_z"].iter().map(|c| col_f(&h, &r, c, "Mpc")).collect();
+        let (mut se, mut n) = (0.0, 0);
+        for k in 0..t.len() {
+            if t[k] > 4.0 {
+                se += (0..3).map(|i| (tcp[i][k] - refs[i][k]).powi(2)).sum::<f64>();
+                n += 1;
+            }
+        }
+        let rms = (se / n as f64).sqrt();
+        let first = r.iter().position(|row| row[m] == "Mpc").unwrap();
+        let fell_back = r[first..].iter().any(|row| row[m] == "Hold");
+        eprintln!("{planner}: circle rms {:.2} mm over {n} ticks, fell back to Hold: {fell_back}", rms * 1e3);
+        assert!(n > 1000, "{planner}: Mpc did not run long enough ({n})");
+        assert!(!fell_back, "{planner}: fell back to Hold");
+        assert!(rms < 1.5e-3, "{planner}: rms {rms}");
+    }
+}
+
+/// A run in Mpc mode records the plans it received; replaying feeds them to
+/// the policy at the same cycles, so the commands match bit for bit.
+#[test]
+fn mpc_log_replays_bit_exact() {
+    let dir = std::env::temp_dir().join(format!("manip-mpc-replay-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let models = root().join("models").canonicalize().unwrap();
+    let text = with_planner("ltv")(std::fs::read_to_string(root().join("robots/rebot_b601_dm.toml")).unwrap().replace("../models", models.to_str().unwrap()));
+    let profile_path = dir.join("dm.toml");
+    std::fs::write(&profile_path, &text).unwrap();
+    let (p, pdir) = RobotProfile::load(&profile_path).unwrap();
+    let arm = assemble::load_arm(&p, &pdir).unwrap();
+    let q0 = assemble::named_pose(&p, &arm, "rest").unwrap();
+    let friction = assemble::joints_in_order(&p, &arm).iter().map(|j| (j.sim_friction, j.sim_damping)).collect();
+    let rigid = RigidPlant::new(arm.clone(), q0, 1.0 / p.control.rate_hz, p.sim.timestep_s, friction, p.sim.friction_v_eps).unwrap();
+    let mut plant = EffectsPlant::new(
+        Box::new(rigid),
+        Effects {
+            command_delay_ticks: 1,
+            observation_delay_ticks: 0,
+            jitter_probability: 0.1,
+            quantization: Some(assemble::feedback_quantization(&p, &arm).unwrap()),
+            seed: 5,
+            period: std::time::Duration::from_secs_f64(1.0 / p.control.rate_hz),
+        },
+    );
+    let log = dir.join("run.mlog");
+    app::run(
+        &p,
+        &arm,
+        &mut plant,
+        Source::Circle { radius: 0.03, freq_hz: 0.2, start: None },
+        RunOptions {
+            mode: Mode::Mpc,
+            start_pose: assemble::named_pose(&p, &arm, "ready"),
+            duration_s: Some(4.0),
+            fast: true,
+            record: None,
+            log: Some((log.clone(), profile_path.clone())),
+            status_every_s: 1e9,
+            monitor: None,
+        },
+    )
+    .unwrap();
+    let (header, frames) = crate::replay::read_log(&log).unwrap();
+    let with_plans = frames.iter().filter(|f| f.plan.is_some()).count();
+    let (rp, rtext, rarm) = crate::replay::load_for_replay(&header, None).unwrap();
+    let r = crate::replay::replay(&header, &frames, &rp, &rtext, &rarm, 5).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    eprintln!("{} frames, {with_plans} with a plan, {} divergences", r.frames, r.divergences.len());
+    assert!(with_plans > 50, "plans recorded: {with_plans}");
+    assert!(r.divergences.is_empty(), "{:?}", r.divergences.first());
+}
+
+/// Format-1 logs (before plans were recorded) still load, without plans.
+#[test]
+fn log_format_1_is_still_read() {
+    let dir = std::env::temp_dir().join(format!("manip-log-v1-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("v1.mlog");
+    let header = crate::replay::LogHeader {
+        format: 1,
+        robot: "x".into(),
+        profile_path: dir.clone(),
+        profile_text: String::new(),
+        axes: vec!["a".into()],
+        rate_hz: 500.0,
+        q0: vec![0.0],
+    };
+    let frame = crate::replay::LogFrameV1 {
+        frame: misa_core::Frame {
+            seq: 0,
+            time: misa_core::Time::from_secs_f64(0.0),
+            intent: misa_core::Intent::default(),
+            observation: misa_core::Observation::empty(1, 0),
+            command: misa_core::Command::idle(1),
+            verdict: Default::default(),
+        },
+        requests: vec![Mode::Hold],
+        target: crate::replay::TargetRec::None,
+    };
+    let mut bytes = Vec::new();
+    for rec in [postcard::to_allocvec(&header).unwrap(), postcard::to_allocvec(&frame).unwrap()] {
+        bytes.extend_from_slice(&(rec.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&rec);
+    }
+    std::fs::write(&path, bytes).unwrap();
+    let (h, frames) = crate::replay::read_log(&path).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(h.format, 1);
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].plan.is_none());
+    assert_eq!(frames[0].requests, vec![Mode::Hold]);
+}

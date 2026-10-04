@@ -20,7 +20,7 @@ use manip_leader::synthetic::SineLeader;
 use manip_leader::LeaderThread;
 use manip_model::{ArmModel, ArmState};
 use misa_core::{AxisId, Command, Observation, Plant};
-use nalgebra::{DVector, Isometry3, Translation3, Vector3};
+use nalgebra::{DVector, Isometry3};
 
 use crate::assemble::TeleopMapping;
 use crate::config::RobotProfile;
@@ -53,6 +53,26 @@ pub enum Source {
 }
 
 impl Source {
+    /// What the MPC aims at for this cycle's `target` (the circle is known in
+    /// advance and previewed; anything else is held fixed over the horizon).
+    fn goal_spec(&self, arm: &ArmModel, target: &Target, s: &ArmState) -> crate::mpc_driver::GoalSpec {
+        use crate::mpc_driver::GoalSpec;
+        match (self, target) {
+            (Source::Circle { radius, freq_hz, start: Some(p0) }, Target::Tcp { posture, .. }) => GoalSpec::Circle {
+                p0: *p0,
+                radius: *radius,
+                freq_hz: *freq_hz,
+                posture: posture.clone(),
+            },
+            (_, Target::Tcp { pose, posture }) => GoalSpec::Fixed { pose: *pose, posture: posture.clone() },
+            (_, Target::Joint(q)) => GoalSpec::Fixed {
+                pose: arm.tcp_pose(q.as_slice()),
+                posture: q.clone(),
+            },
+            (_, Target::None) => GoalSpec::Fixed { pose: s.tcp_pose, posture: s.q.clone() },
+        }
+    }
+
     fn target(&mut self, arm: &ArmModel, t: f64, keep: &DVector<f64>, s: &ArmState) -> Target {
         match self {
             Source::None => Target::None,
@@ -65,9 +85,7 @@ impl Source {
             }
             Source::Circle { radius, freq_hz, start } => {
                 let p0 = *start.get_or_insert(s.tcp_pose);
-                let w = std::f64::consts::TAU * *freq_hz * t;
-                let d = Vector3::new(0.0, *radius * w.sin(), *radius * (w.cos() - 1.0));
-                let pose = Isometry3::from_parts(Translation3::from(p0.translation.vector + d), p0.rotation);
+                let pose = crate::mpc_driver::circle_pose(&p0, *radius, *freq_hz, t);
                 let _ = arm;
                 Target::Tcp { pose, posture: keep.clone() }
             }
@@ -265,6 +283,13 @@ pub fn run(
     log::info!("initial pose {:?}", q.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>());
 
     let mut policy = Policy::new(profile, arm, &q)?;
+    // The planner (Mpc mode only): on a worker thread in real time, inside
+    // the cycle when the simulation runs as fast as it can.
+    let mut mpc = if opts.mode == Mode::Mpc {
+        Some(crate::mpc_driver::MpcDriver::new(crate::assemble::mpc_planner(profile, arm)?, arm, profile.mpc.rate_hz, opts.fast))
+    } else {
+        None
+    };
     let mut rec = match &opts.record {
         Some(p) => Some(Recorder::create(p, arm).map_err(|e| e.to_string())?),
         None => None,
@@ -355,7 +380,16 @@ pub fn run(
             (Some(goal), false) => Target::Joint(goal.clone()),
             _ => source.target(arm, t, &keep, &s),
         };
-        let out = policy.step(arm, &obs, &requests, &target);
+        let plan = match mpc.as_mut() {
+            Some(d) if pending == Mode::Mpc => {
+                if requests.contains(&Mode::Mpc) {
+                    d.restart();
+                }
+                d.poll(policy.time(), s.q.as_slice(), s.v.as_slice(), || source.goal_spec(arm, &target, &s))
+            }
+            _ => None,
+        };
+        let out = policy.step(arm, &obs, &requests, &target, plan.as_ref());
         if let Some(tr) = &out.info.transition {
             log::info!("{tr}");
         }
@@ -379,7 +413,7 @@ pub fn run(
                 .map_err(|e| e.to_string())?;
         }
         if let Some(l) = log.as_mut() {
-            l.frame(t, &obs, &requests, &target, policy.command(), &out.verdict)?;
+            l.frame(t, &obs, &requests, &target, plan.as_ref(), policy.command(), &out.verdict)?;
         }
         let s = out.state;
         let cmd = policy.command().clone();

@@ -26,10 +26,12 @@ use crate::assemble;
 use crate::config::RobotProfile;
 use crate::policy::Policy;
 use crate::supervisor::{Mode, Target};
+use manip_mpc::JointPlan;
 
 /// Bump when [`LogHeader`] / [`LogFrame`] change shape (postcard is not
-/// self-describing, so a reader must refuse other versions).
-pub const LOG_FORMAT: u32 = 1;
+/// self-describing, so a reader must refuse other versions). Format 1 had no
+/// `plan` and is still read (as frames without plans).
+pub const LOG_FORMAT: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogHeader {
@@ -89,12 +91,61 @@ impl From<&TargetRec> for Target {
     }
 }
 
+/// Serializable form of a [`JointPlan`] (bit-exact round trip).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanRec {
+    pub idx: Vec<u32>,
+    pub t0: f64,
+    pub dt: f64,
+    pub q: Vec<Vec<f64>>,
+    pub v: Vec<Vec<f64>>,
+    pub a: Vec<Vec<f64>>,
+}
+
+impl From<&JointPlan> for PlanRec {
+    fn from(p: &JointPlan) -> Self {
+        let rows = |x: &Vec<DVector<f64>>| x.iter().map(|r| r.as_slice().to_vec()).collect();
+        Self {
+            idx: p.idx.iter().map(|&i| i as u32).collect(),
+            t0: p.t0,
+            dt: p.dt,
+            q: rows(&p.q),
+            v: rows(&p.v),
+            a: rows(&p.a),
+        }
+    }
+}
+
+impl From<&PlanRec> for JointPlan {
+    fn from(p: &PlanRec) -> Self {
+        let rows = |x: &Vec<Vec<f64>>| x.iter().map(|r| DVector::from_column_slice(r)).collect();
+        Self {
+            idx: p.idx.iter().map(|&i| i as usize).collect(),
+            t0: p.t0,
+            dt: p.dt,
+            q: rows(&p.q),
+            v: rows(&p.v),
+            a: rows(&p.a),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogFrame {
     /// Observation, gated command and verdict of this cycle (misa-core's shape).
     pub frame: Frame,
     pub requests: Vec<Mode>,
     pub target: TargetRec,
+    /// A plan that arrived this cycle (Mpc mode).
+    pub plan: Option<PlanRec>,
+}
+
+/// Format-1 frame (no plan).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LogFrameV1 {
+    pub(crate) frame: Frame,
+    pub(crate) requests: Vec<Mode>,
+    pub(crate) target: TargetRec,
 }
 
 pub struct LogWriter {
@@ -113,12 +164,14 @@ impl LogWriter {
         Ok(s)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn frame(
         &mut self,
         t: f64,
         obs: &Observation,
         requests: &[Mode],
         target: &Target,
+        plan: Option<&JointPlan>,
         command: &misa_core::Command,
         verdict: &SafetyVerdict,
     ) -> Result<(), String> {
@@ -133,6 +186,7 @@ impl LogWriter {
             },
             requests: requests.to_vec(),
             target: target.into(),
+            plan: plan.map(PlanRec::from),
         };
         self.seq += 1;
         self.put(&f)
@@ -152,12 +206,24 @@ impl LogWriter {
 pub fn read_log(path: &Path) -> Result<(LogHeader, Vec<LogFrame>), String> {
     let mut r = BufReader::new(File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
     let header: LogHeader = next(&mut r)?.ok_or("empty log")?;
-    if header.format != LOG_FORMAT {
-        return Err(format!("log format {} (this build reads {LOG_FORMAT})", header.format));
-    }
     let mut frames = Vec::new();
-    while let Some(f) = next(&mut r)? {
-        frames.push(f);
+    match header.format {
+        LOG_FORMAT => {
+            while let Some(f) = next(&mut r)? {
+                frames.push(f);
+            }
+        }
+        1 => {
+            while let Some(f) = next::<LogFrameV1>(&mut r)? {
+                frames.push(LogFrame {
+                    frame: f.frame,
+                    requests: f.requests,
+                    target: f.target,
+                    plan: None,
+                });
+            }
+        }
+        other => return Err(format!("log format {other} (this build reads 1 and {LOG_FORMAT})")),
     }
     Ok((header, frames))
 }
@@ -203,7 +269,8 @@ pub fn replay(
     let mut replayed = Vec::with_capacity(frames.len());
     for lf in frames {
         let target: Target = (&lf.target).into();
-        let out = policy.step(arm, &lf.frame.observation, &lf.requests, &target);
+        let plan: Option<JointPlan> = lf.plan.as_ref().map(JointPlan::from);
+        let out = policy.step(arm, &lf.frame.observation, &lf.requests, &target, plan.as_ref());
         replayed.push(Frame {
             seq: lf.frame.seq,
             time: lf.frame.time,

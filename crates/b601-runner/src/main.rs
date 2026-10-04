@@ -17,6 +17,7 @@ mod config;
 mod effects;
 mod guard;
 mod hw;
+mod mpc_driver;
 mod policy;
 mod record;
 mod replay;

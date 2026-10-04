@@ -104,6 +104,7 @@ pub fn supervisor_config(p: &RobotProfile, arm: &ArmModel) -> Result<SupervisorC
             }
             None => None,
         },
+        plan_timeout_s: p.mpc.plan_timeout_s,
     })
 }
 
@@ -226,4 +227,53 @@ pub fn friction_model(p: &RobotProfile, arm: &ArmModel, v_eps: f64) -> Option<ma
         v_eps,
     };
     (!m.is_zero()).then_some(m)
+}
+
+/// The planner selected by `[mpc]` (workspace box from `[safety]`).
+pub fn mpc_planner(p: &RobotProfile, arm: &ArmModel) -> Result<Box<dyn manip_mpc::Planner + Send>, String> {
+    let m = &p.mpc;
+    let workspace = p.safety.as_ref().map(|s| {
+        let mut points: Vec<(String, nalgebra::Vector3<f64>)> =
+            s.points.iter().map(|pt| (pt.link.clone(), nalgebra::Vector3::from(pt.xyz))).collect();
+        points.push((p.robot.tcp.link.clone(), nalgebra::Vector3::from(p.robot.tcp.xyz)));
+        manip_mpc::WorkspaceBox {
+            points,
+            min: nalgebra::Vector3::from(s.box_min),
+            max: nalgebra::Vector3::from(s.box_max),
+        }
+    });
+    let js = joints_in_order(p, arm);
+    match m.planner.as_str() {
+        "ltv" => {
+            let mut c = manip_mpc::LtvConfig::defaults(arm.n());
+            if m.horizon > 0 {
+                c.horizon = m.horizon;
+            }
+            if m.dt > 0.0 {
+                c.dt = m.dt;
+            }
+            c.a_max = col(&js, |j| j.a_max);
+            c.tcp_v_max = Some(m.tcp_v_max);
+            c.workspace = workspace;
+            Ok(Box::new(manip_mpc::LtvMpc::new(c)))
+        }
+        "ilqr" => {
+            let mut c = manip_mpc::IlqrConfig::defaults();
+            if m.horizon > 0 {
+                c.horizon = m.horizon;
+            }
+            if m.dt > 0.0 {
+                c.dt = m.dt;
+            }
+            c.tcp_v_max = Some(m.tcp_v_max);
+            c.workspace = workspace;
+            Ok(Box::new(manip_mpc::IlqrMpc::new(c)))
+        }
+        other => Err(format!("[mpc] planner = \"{other}\" is not supported (ltv | ilqr)")),
+    }
+}
+
+/// The WBC that tracks the plan: `[osc]`'s safety, motor PD and solver settings.
+pub fn tracking_config(p: &RobotProfile, arm: &ArmModel) -> Result<manip_wbc::TrackingConfig, String> {
+    Ok(manip_wbc::TrackingConfig::from_osc(&osc_config(p, arm)?, p.mpc.track_omega))
 }

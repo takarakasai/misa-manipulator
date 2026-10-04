@@ -11,7 +11,8 @@
 use std::time::Duration;
 
 use manip_control::JointCommand;
-use manip_wbc::Osc;
+use manip_mpc::JointPlan;
+use manip_wbc::{JointTracking, Osc};
 use manip_model::{ArmModel, ArmState};
 use misa_core::{AxisCommand, AxisId, Command, ControlMode, Observation, SafetyGate, SafetyVerdict};
 use nalgebra::DVector;
@@ -43,6 +44,7 @@ impl Policy {
             sup: Supervisor::new(
                 assemble::supervisor_config(profile, arm)?,
                 Osc::new(assemble::osc_config(profile, arm)?),
+                JointTracking::new(assemble::tracking_config(profile, arm)?),
                 arm,
                 q0,
             ),
@@ -54,6 +56,11 @@ impl Policy {
 
     pub fn mode(&self) -> Mode {
         self.sup.mode()
+    }
+
+    /// Clock of the next step [s] (the time a plan requested now starts at).
+    pub fn time(&self) -> f64 {
+        self.sup.time()
     }
 
     pub fn osc_failures(&self) -> u64 {
@@ -72,12 +79,17 @@ impl Policy {
         arm.evaluate(&q, &v)
     }
 
-    /// One cycle: apply `requests` in order, run the active control law toward
+    /// One cycle: apply `requests` in order, take a newly arrived `plan` (an
+    /// input like the target: the planner runs outside, and the log records
+    /// which cycle each plan reached), run the active control law toward
     /// `target`, then the SafetyGate.
-    pub fn step(&mut self, arm: &ArmModel, obs: &Observation, requests: &[Mode], target: &Target) -> StepOut {
+    pub fn step(&mut self, arm: &ArmModel, obs: &Observation, requests: &[Mode], target: &Target, plan: Option<&JointPlan>) -> StepOut {
         let s = Self::state(arm, obs);
         for &m in requests {
             self.sup.request(m, arm, &s);
+        }
+        if let Some(p) = plan {
+            self.sup.set_plan(p.clone());
         }
         let (jc, info) = self.sup.tick(arm, &s, target, self.dt);
         to_command(&jc, &mut self.cmd);

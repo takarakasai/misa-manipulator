@@ -204,6 +204,7 @@ dependencies = [
  "manip-control",
  "manip-leader",
  "manip-model",
+ "manip-mpc",
  "manip-plant-can",
  "manip-plant-mujoco",
  "manip-wbc",

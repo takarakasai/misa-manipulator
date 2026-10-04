@@ -357,6 +357,28 @@ motorbridge で ID（1–7 / Master 0x11–0x17）とゼロ点（Motorbridge Stu
   0.9 mm 越え。計画 1 回（N = 25、dt 40 ms）中央値 1.5 ms / p95 3.4 ms。既知: 届かない
   目標で手首ロールが計画ごとに ~1.3 rad/s の速度を行き来する（TCP は 1 cm 以内で止まる）。
 
+## 5c. Mpc モード（b601-runner、2026-10-04、シムと仮想アームのみ）
+
+- `manip run ... --mode mpc`。プロファイルの `[mpc]`（`planner = "ltv" | "ilqr"`、
+  `rate_hz` 50、`horizon` / `dt`（0 = プランナーの既定）、`track_omega` 20、
+  `tcp_v_max` 0.3、`plan_timeout_s` 0.5）。作業領域の箱と点は `[safety]` から、WBC
+  （`JointTracking`）の安全・モータ側 PD（`osc_kp/kd`）・ソルバ設定は `[osc]` から。
+  計画がまだ無い・古いときは Mpc に入った姿勢で Hold、WBC が解けなければ Hold へ。
+- 計画は **入力として** `Policy::step` に渡す（`mpc_driver.rs`）。実時間はワーカー
+  スレッドで計画、`--fast` のシムはループ内で同期計画。届いた周期の計画を run log に
+  記録するので（**log format 2**、format 1 も計画なしとして読める）、非同期でも
+  `manip replay` はビット単位で一致する。円は先の軌跡が分かるので先読みする
+  （`GoalSpec::Circle`）。リーダー等は最新の目標を一定とみなす。
+- シム（`--plant rigid`、摩擦・遅れ・量子化あり）で 3 cm の円: OSC rms 1.56 mm、
+  LTV 0.76 mm、iLQR 0.43 mm。仮想アーム（実時間・非同期、`--rt-priority 80`）:
+  LTV 0.63 mm、iLQR 0.35 mm、1 周期の最大 0.43 ms（同期だと計画込みで 2〜3.6 ms）。
+- iLQR で踏んだもの: 初期値の「その場で保持」の減衰を固定ゲインや M の対角で決めると、
+  軽い手首（~0.0035 kg·m²）が重い肘と結合して 40 ms 刻みで発散した（初速が 0 の
+  manip-mpc のテストでは出ず、ready に着いた直後の 0.03 rad/s で出た）。
+  `τ = g − (½/h)·M·v`（全関節が 1 刻みで速度半分）で解決。
+- MPC のワーカースレッドも `--rt-priority` を継承する（制御ループと同じ優先度）。
+  32 コアなので今は問題ないが、実機で周期が乱れるなら下げる。
+
 ## 6. 未確定・次にやること
 
 - **グリッパの換算**: DM は実測 0.00844 m/rad（全開がモータ零から 5.92 rad、指の間隔

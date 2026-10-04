@@ -28,7 +28,8 @@
 //! toward the leader within the speed limit.
 
 use manip_control::{JointCommand, JointGains, JointImpedance, JointRef, JointShaper, ShaperLimits, TcpShaper};
-use manip_wbc::{Osc, OscReport, TcpRef};
+use manip_mpc::JointPlan;
+use manip_wbc::{JointTracking, Osc, OscReport, TcpRef, TrackingReport};
 use manip_model::{ArmModel, ArmState};
 use nalgebra::{DVector, Isometry3};
 
@@ -42,6 +43,9 @@ pub enum Mode {
     Joint,
     /// TCP tracking (operational-space control, hierarchical QP).
     Osc,
+    /// TCP tracking through a receding-horizon plan (manip-mpc) followed by
+    /// the joint-tracking WBC.
+    Mpc,
     /// Fold to the rest pose.
     Park,
     /// Finished folding. The runner releases.
@@ -68,6 +72,7 @@ pub struct TickInfo {
     pub reference: Option<JointRef>,
     pub tcp_reference: Option<Isometry3<f64>>,
     pub osc: Option<OscReport>,
+    pub mpc: Option<TrackingReport>,
     /// Whether the mode changed this cycle (and if so, why).
     pub transition: Option<String>,
     /// Joint mode: the reference step was refused by the workspace /
@@ -94,6 +99,8 @@ pub struct SupervisorConfig {
     pub friction: Option<manip_control::FrictionModel>,
     /// Workspace box and self-collision (`[safety]`). `None` = unchecked.
     pub safety: Option<crate::guard::SafetyModel>,
+    /// Mpc mode: hold if the newest plan is older than this [s].
+    pub plan_timeout_s: f64,
 }
 
 pub struct Supervisor {
@@ -103,6 +110,9 @@ pub struct Supervisor {
     hold: JointImpedance,
     gravity: JointImpedance,
     osc: Osc,
+    tracking: JointTracking,
+    /// Newest plan from the planner (Mpc mode).
+    plan: Option<JointPlan>,
     shaper: JointShaper,
     tcp_shaper: TcpShaper,
     /// Hold reference: the pose when entering the mode.
@@ -116,7 +126,7 @@ pub struct Supervisor {
 
 impl Supervisor {
     /// `q` is the **measured pose**. Starts by holding there.
-    pub fn new(cfg: SupervisorConfig, osc: Osc, arm: &ArmModel, q: &DVector<f64>) -> Self {
+    pub fn new(cfg: SupervisorConfig, osc: Osc, tracking: JointTracking, arm: &ArmModel, q: &DVector<f64>) -> Self {
         let mut track = JointImpedance::new(cfg.track.clone(), cfg.feedforward);
         track.gravity_scale = cfg.gravity_scale.clone();
         track.friction = cfg.friction.clone();
@@ -134,6 +144,8 @@ impl Supervisor {
             hold,
             gravity,
             osc,
+            tracking,
+            plan: None,
             shaper,
             tcp_shaper,
             hold_q: q.clone(),
@@ -145,6 +157,17 @@ impl Supervisor {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Clock of the next tick [s] (a plan requested with the state observed
+    /// before that tick starts at this time).
+    pub fn time(&self) -> f64 {
+        self.t
+    }
+
+    /// A new plan from the planner (Mpc mode; ignored in other modes).
+    pub fn set_plan(&mut self, plan: JointPlan) {
+        self.plan = Some(plan);
     }
 
     /// Switch modes. On entry, reset the reference to the **current measurement**
@@ -162,6 +185,12 @@ impl Supervisor {
                 self.tcp_shaper.reset(arm.tcp_pose(s.q.as_slice()));
                 self.osc.reset();
             }
+            Mode::Mpc => {
+                self.shaper.reset(s.q.clone());
+                self.tracking.reset();
+                self.plan = None;
+                self.hold_q = s.q.clone();
+            }
             Mode::Done => {}
         }
         log::info!("mode {:?} → {:?}", self.mode, mode);
@@ -169,6 +198,7 @@ impl Supervisor {
     }
 
     pub fn tick(&mut self, arm: &ArmModel, s: &ArmState, target: &Target, dt: f64) -> (JointCommand, TickInfo) {
+        let now = self.t;
         self.t += dt;
         let mut info = TickInfo::default();
         let ramp = if self.cfg.startup_ramp_s > 0.0 {
@@ -265,6 +295,50 @@ impl Supervisor {
                         let r = JointRef::at_rest(self.hold_q.clone());
                         info.reference = Some(r.clone());
                         self.hold.command(arm, s, &r)
+                    }
+                }
+            }
+            Mode::Mpc => {
+                if let Target::Tcp { pose, .. } = target {
+                    info.tcp_reference = Some(*pose);
+                }
+                // Posture / gripper reference from the target, as in OSC.
+                let posture = match target {
+                    Target::Tcp { posture, .. } => clamp_to_limits(arm, posture),
+                    Target::Joint(q) => clamp_to_limits(arm, q),
+                    Target::None => self.shaper.current().q.clone(),
+                };
+                let pr = self.shaper.step(&posture, dt).clone();
+                let base = self.track.command(arm, s, &pr);
+                match self.plan.as_ref().filter(|p| now - p.t0 <= self.cfg.plan_timeout_s) {
+                    None => {
+                        // No plan yet (or a stalled planner): hold where Mpc started.
+                        let r = JointRef::at_rest(self.hold_q.clone());
+                        info.reference = Some(r.clone());
+                        let mut c = self.hold.command(arm, s, &r);
+                        scale_gains(&mut c, ramp);
+                        c
+                    }
+                    Some(plan) => {
+                        let r = plan.sample_full(now, &pr);
+                        let cbfs = self.cfg.safety.as_ref().map(|g| g.cbfs(arm, s)).unwrap_or_default();
+                        match self.tracking.command(arm, s, &r, dt, base, &cbfs) {
+                            Ok((c, report)) => {
+                                info.mpc = Some(report);
+                                info.reference = Some(r);
+                                c
+                            }
+                            Err(e) => {
+                                self.osc_failures += 1;
+                                info.transition = Some(format!("Mpc → Hold: {e}"));
+                                log::warn!("MPC tracking unsolvable, falling back to hold: {e}");
+                                self.mode = Mode::Hold;
+                                self.hold_q = s.q.clone();
+                                let r = JointRef::at_rest(self.hold_q.clone());
+                                info.reference = Some(r.clone());
+                                self.hold.command(arm, s, &r)
+                            }
+                        }
                     }
                 }
             }

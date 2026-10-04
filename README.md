@@ -76,6 +76,8 @@ cargo build --release -p b601-runner --features sim
 manip run --robot robots/rebot_b601_dm.toml --plant sim --source sine --mode joint --duration 20
 # シム: TCP で円を描く（OSC）。畳んだ姿勢は可動域の端なので ready へ運んでから
 manip run --robot robots/rebot_b601_dm.toml --plant sim --source circle --mode osc --start-pose ready
+# MPC（+ WBC）: [mpc] のプランナー（ltv | ilqr）が計画し、WBC が毎周期それを追う
+manip run --robot robots/rebot_b601_dm.toml --plant rigid --source circle --mode mpc --start-pose ready --fast
 # シムは既定で実機の「悪さ」（遅延・ジッタ・量子化・摩擦）を掛ける。
 # --ideal で外す、--delay-ticks / --jitter で上書き。掃引は scripts/sweep_effects.py
 # 実機用 Plant（バススレッド・座標変換）を仮想の腕で回す（実時間）

@@ -411,7 +411,11 @@ impl Planner for IlqrMpc {
         // Initial guess: the previous policy (torques + feedback, shifted to
         // now; open-loop torques alone diverge on an arm under gravity), else
         // gravity compensation with light damping.
-        let hold = |_: usize, _: &DVector<f64>, v: &DVector<f64>, e: &Eval| &e.gravity - v * 1.0;
+        // Damping that halves the velocity every interval in the discrete model:
+        // τ = g − (½/h)·M·v, so q̈ ≈ −½v/h on every joint. A fixed gain (or one
+        // scaled by M's diagonal) is unstable for the light wrist coupled to the
+        // heavy elbow at h = 40 ms and made the initial guess blow up.
+        let hold = |_: usize, _: &DVector<f64>, v: &DVector<f64>, e: &Eval| &e.gravity - (&e.mass * v) * (0.5 / h);
         let mut traj = match self.prev.as_ref().filter(|pr| pr.idx == idx && !pr.u.is_empty()) {
             Some(pr) => {
                 let off = ((t - pr.t0) / h).round().max(0.0) as usize;
