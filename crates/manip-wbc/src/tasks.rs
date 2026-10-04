@@ -55,11 +55,20 @@ pub fn pose_error(target: &Isometry3<f64>, current: &Isometry3<f64>) -> Vector6<
 
 /// Rigid-body dynamics of the chain for the QP. Friction (if any) is folded
 /// into `h`: plant `M·q̈ + h = τ − τ_friction` ⇒ plan with `h' = h + τ_friction`,
-/// evaluated at the measured velocity.
-pub fn chain_dynamics(c: &ChainState, formulation: Formulation, friction: Option<&FrictionModel>) -> Dynamics {
+/// evaluated at `v_friction` (chain DOFs): the measured velocity when there is
+/// no reference (OSC), else the reference velocity. At the measured velocity
+/// an over-estimated Coulomb term is negative damping around v = 0 (slope
+/// `coulomb / v_eps`): on the real B601-DM, folded in Mpc mode, joint2
+/// (1.4 N·m, v_eps 0.05) and joint4 swung ±1° at 2 Hz.
+pub fn chain_dynamics(
+    c: &ChainState,
+    formulation: Formulation,
+    friction: Option<&FrictionModel>,
+    v_friction: &DVector<f64>,
+) -> Dynamics {
     let n = c.n();
     let nle = match friction {
-        Some(f) => &c.nle + f.select(&c.idx).compensation(&c.v),
+        Some(f) => &c.nle + f.select(&c.idx).compensation(v_friction),
         None => c.nle.clone(),
     };
     Dynamics::new(formulation, &c.mass, &nle, &DMatrix::zeros(0, n), n)

@@ -34,6 +34,7 @@ pub struct TrackingConfig {
     pub kd: DVector<f64>,
     pub torque_reg: f64,
     pub torque_scale: f64,
+    /// Friction feedforward, evaluated at the reference velocity.
     pub friction: Option<FrictionModel>,
     pub a_max: DVector<f64>,
     pub cbf_alpha: f64,
@@ -118,7 +119,8 @@ impl JointTracking {
         let c = ChainState::new(arm, s_full);
         let cfg = &self.cfg;
         let tau_max = c.torque_limits(cfg.torque_scale);
-        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref());
+        let r_chain = c.pick_ref(r);
+        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), &r_chain.v);
         let jl = JointLimitParams {
             a_max: c.pick(&cfg.a_max),
             alpha: cfg.cbf_alpha,
@@ -126,7 +128,7 @@ impl JointTracking {
             v_scale: cfg.v_scale,
         };
         let level0 = tasks::with_barriers(tasks::physics_and_limits(&c, &d, &tau_max, &jl), &c, &d, cbfs, cfg.cbf_alpha);
-        let a_ref = tasks::joint_pd_acceleration(&c, &c.pick_ref(r), &c.pick(&cfg.kp), &c.pick(&cfg.kd));
+        let a_ref = tasks::joint_pd_acceleration(&c, &r_chain, &c.pick(&cfg.kp), &c.pick(&cfg.kd));
         let level1 = tasks::joint_acceleration(&d, &a_ref);
         let level2 = tasks::torque_regularization(&d, cfg.torque_reg);
         let levels: [Task; 3] = [level0, level1, level2];
