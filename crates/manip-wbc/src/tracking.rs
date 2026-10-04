@@ -34,7 +34,8 @@ pub struct TrackingConfig {
     pub kd: DVector<f64>,
     pub torque_reg: f64,
     pub torque_scale: f64,
-    /// Friction feedforward, evaluated at the reference velocity.
+    /// Friction feedforward (where the reference and measured velocities
+    /// agree, see `tasks::agreed_friction`).
     pub friction: Option<FrictionModel>,
     pub a_max: DVector<f64>,
     pub cbf_alpha: f64,
@@ -120,7 +121,7 @@ impl JointTracking {
         let cfg = &self.cfg;
         let tau_max = c.torque_limits(cfg.torque_scale);
         let r_chain = c.pick_ref(r);
-        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), &r_chain.v);
+        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), Some(&r_chain.v));
         let jl = JointLimitParams {
             a_max: c.pick(&cfg.a_max),
             alpha: cfg.cbf_alpha,

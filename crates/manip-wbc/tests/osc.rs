@@ -105,3 +105,15 @@ fn wbc_starts_with_a_joint_past_its_limit() {
         assert!(q[j2] <= q0[j2] + 1e-3, "joint2 went further out: {}", q[j2]);
     }
 }
+
+/// Friction compensation with a reference: the smaller where the reference
+/// and the measured velocity agree in sign, nothing where they disagree.
+#[test]
+fn agreed_friction_takes_the_smaller_agreeing_compensation() {
+    use manip_wbc::tasks::agreed_friction;
+    use nalgebra::DVector;
+    let at_ref = DVector::from_vec(vec![1.4, -1.4, 0.0, 0.3, -0.2]);
+    let at_meas = DVector::from_vec(vec![0.5, -1.4, 1.4, -0.3, -1.0]);
+    let f = agreed_friction(&at_ref, &at_meas);
+    assert_eq!(f.as_slice(), &[0.5, -1.4, 0.0, 0.0, -0.2]);
+}

@@ -226,7 +226,7 @@ impl Osc {
         let posture = c.pick_ref(posture_full);
         let tau_max = c.torque_limits(cfg.torque_scale);
 
-        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), &c.v);
+        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), None);
         let level0 = tasks::physics_and_limits(&c, &d, &tau_max, &cfg.joint_limits(&c));
         let level0 = tasks::with_barriers(level0, &c, &d, cbfs, cfg.cbf_alpha);
         let tcp_task = tasks::tcp_acceleration(&c, &d, tcp, &cfg.tcp_gains(), cfg.track_orientation, &cfg.singularity());
