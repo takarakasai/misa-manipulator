@@ -78,6 +78,17 @@ pub struct MpcSection {
     /// Low-pass time constant of that velocity estimate [s].
     #[serde(default = "d005")]
     pub target_v_tau_s: f64,
+    /// Continue plans from the tracked plan while the measurement is within
+    /// `[|Δq| rad, |Δv| rad/s]` of it (`MpcDriver::from_reference`); empty =
+    /// always from the measurement.
+    #[serde(default)]
+    pub replan_from_reference: Vec<f64>,
+    /// Integral action of the tracking WBC [N·m/(rad·s)]; 0 = off.
+    #[serde(default)]
+    pub track_ki: f64,
+    /// Its clamp per joint, as a multiple of the joint's `friction`.
+    #[serde(default = "d15")]
+    pub track_i_max_friction: f64,
 }
 
 impl Default for MpcSection {
@@ -92,6 +103,9 @@ impl Default for MpcSection {
             plan_timeout_s: 0.5,
             target_lookahead_s: 0.0,
             target_v_tau_s: 0.05,
+            replan_from_reference: Vec::new(),
+            track_ki: 0.0,
+            track_i_max_friction: 1.5,
         }
     }
 }
@@ -352,6 +366,10 @@ pub struct SimSection {
     /// Link-link contact (off by default; see SimOptions in manip-plant-mujoco).
     #[serde(default)]
     pub self_collision: bool,
+    /// `--plant rigid`: dry friction that sticks (`RigidPlant::with_stiction`)
+    /// instead of the tanh ramp.
+    #[serde(default)]
+    pub stiction: bool,
     /// Velocity [rad/s] over which Coulomb friction ramps up (tanh smoothing).
     #[serde(default = "default_friction_v_eps")]
     pub friction_v_eps: f64,

@@ -121,6 +121,15 @@ pub struct MpcDriver {
     /// The planner's distance from the joint limits (joint targets are
     /// clamped by it before they become TCP goals).
     pub q_margin: f64,
+    /// Continue each plan from the plan being tracked (sampled at the request
+    /// time) while the measurement is within `(|Δq|∞ rad, |Δv|∞ rad/s)` of it,
+    /// else start from the measurement; `None` = always the measurement.
+    /// From the measurement, the tracker's error restarts at 0 every plan (no
+    /// position stiffness: on the real arm stiction held 2–3° offsets), and the
+    /// reference velocity copies the measured one (friction feedforward at it
+    /// is negative damping: a 2 Hz swing at rest).
+    pub from_reference: Option<(f64, f64)>,
+    last: Option<JointPlan>,
     pub plans: u64,
     pub failures: u64,
     pub last_report: Option<MpcReport>,
@@ -154,6 +163,8 @@ impl MpcDriver {
             next_t: f64::NEG_INFINITY,
             reset_next: true,
             q_margin,
+            from_reference: None,
+            last: None,
             plans: 0,
             failures: 0,
             last_report: None,
@@ -164,18 +175,37 @@ impl MpcDriver {
     pub fn restart(&mut self) {
         self.reset_next = true;
         self.next_t = f64::NEG_INFINITY;
+        self.last = None;
+    }
+
+    /// The state a plan requested at `t` starts from (see `from_reference`).
+    fn start_state(&self, t: f64, q: &[f64], v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let (mut q0, mut v0) = (q.to_vec(), v.to_vec());
+        if let (Some((dq_max, dv_max)), Some(p)) = (self.from_reference, &self.last) {
+            let r = p.sample(t);
+            let close = p.idx.iter().enumerate().all(|(k, &i)| (r.q[k] - q[i]).abs() < dq_max && (r.v[k] - v[i]).abs() < dv_max);
+            if close {
+                for (k, &i) in p.idx.iter().enumerate() {
+                    q0[i] = r.q[k];
+                    v0[i] = r.v[k];
+                }
+            }
+        }
+        (q0, v0)
     }
 
     /// Request a plan if one is due, and return a plan that became available.
     pub fn poll(&mut self, t: f64, q: &[f64], v: &[f64], goal: impl FnOnce() -> GoalSpec) -> Option<JointPlan> {
         let due = t >= self.next_t;
+        let start = if due { Some(self.start_state(t, q, v)) } else { None };
         let out = match &mut self.exec {
             Exec::Sync { planner, arm } => {
                 if !due {
                     return None;
                 }
                 self.next_t = t + self.period;
-                let job = Job { q: q.to_vec(), v: v.to_vec(), t, goal: goal(), reset: std::mem::take(&mut self.reset_next) };
+                let (q0, v0) = start.expect("due");
+                let job = Job { q: q0, v: v0, t, goal: goal(), reset: std::mem::take(&mut self.reset_next) };
                 Some(plan_once(planner.as_mut(), arm, &job))
             }
             Exec::Async { tx, rx, busy, .. } => {
@@ -191,7 +221,8 @@ impl MpcDriver {
                     }
                 };
                 if due && !*busy && let Some(tx) = tx.as_ref() {
-                    let job = Job { q: q.to_vec(), v: v.to_vec(), t, goal: goal(), reset: std::mem::take(&mut self.reset_next) };
+                    let (q0, v0) = start.expect("due");
+                    let job = Job { q: q0, v: v0, t, goal: goal(), reset: std::mem::take(&mut self.reset_next) };
                     if tx.send(job).is_ok() {
                         *busy = true;
                         self.next_t = t + self.period;
@@ -205,6 +236,7 @@ impl MpcDriver {
                 self.plans += 1;
                 log::debug!("plan t0={:.3}: {report:?}", plan.t0);
                 self.last_report = Some(report);
+                self.last = Some(plan.clone());
                 Some(plan)
             }
             Some(Err(e)) => {

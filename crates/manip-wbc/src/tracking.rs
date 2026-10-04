@@ -32,6 +32,14 @@ pub struct TrackingConfig {
     /// (all independent DOFs; only the chain is used).
     pub kp: DVector<f64>,
     pub kd: DVector<f64>,
+    /// Integral of the position error, as torque [N·m/(rad·s)] (all
+    /// independent DOFs), clamped to `i_max` [N·m]; it leaks away while the
+    /// reference moves faster than `i_v_still` [rad/s]. Holds against
+    /// stiction, which a pure PD only does with an offset of
+    /// `stiction / stiffness` (2–3° on the real B601-DM shoulder/elbow).
+    pub ki: DVector<f64>,
+    pub i_max: DVector<f64>,
+    pub i_v_still: f64,
     pub torque_reg: f64,
     pub torque_scale: f64,
     /// Friction feedforward at the reference velocity, gated by the measured
@@ -57,6 +65,9 @@ impl TrackingConfig {
         Self {
             kp: DVector::from_element(n, omega * omega),
             kd: DVector::from_element(n, 2.0 * omega),
+            ki: DVector::zeros(n),
+            i_max: DVector::zeros(n),
+            i_v_still: 0.05,
             torque_reg: osc.torque_reg,
             torque_scale: osc.torque_scale,
             friction: osc.friction.clone(),
@@ -90,6 +101,8 @@ pub struct JointTracking {
     pub cfg: TrackingConfig,
     solver: Solver,
     output: MotorOutput,
+    /// Integral torque per chain DOF.
+    integral: Option<DVector<f64>>,
 }
 
 impl JointTracking {
@@ -98,12 +111,14 @@ impl JointTracking {
             cfg,
             solver: Solver::new(),
             output: MotorOutput::default(),
+            integral: None,
         }
     }
 
     pub fn reset(&mut self) {
         self.solver.reset();
         self.output.reset();
+        self.integral = None;
     }
 
     /// Track `r` (all independent DOFs; only the TCP chain is solved, the rest
@@ -121,7 +136,24 @@ impl JointTracking {
         let cfg = &self.cfg;
         let tau_max = c.torque_limits(cfg.torque_scale);
         let r_chain = c.pick_ref(r);
-        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), Some(&r_chain.v));
+        let (ki, i_max) = (c.pick(&cfg.ki), c.pick(&cfg.i_max));
+        let integral = self.integral.get_or_insert_with(|| DVector::zeros(c.n()));
+        if integral.len() != c.n() {
+            *integral = DVector::zeros(c.n());
+        }
+        for i in 0..c.n() {
+            if ki[i] == 0.0 {
+                integral[i] = 0.0;
+                continue;
+            }
+            if r_chain.v[i].abs() > cfg.i_v_still {
+                integral[i] *= 0.98;
+            } else {
+                integral[i] += ki[i] * (r_chain.q[i] - c.q[i]) * dt;
+            }
+            integral[i] = integral[i].clamp(-i_max[i], i_max[i]);
+        }
+        let d = tasks::chain_dynamics_with(&c, cfg.formulation, cfg.friction.as_ref(), Some(&r_chain.v), Some(&integral.clone()));
         let jl = JointLimitParams {
             a_max: c.pick(&cfg.a_max),
             alpha: cfg.cbf_alpha,

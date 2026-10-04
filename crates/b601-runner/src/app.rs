@@ -332,7 +332,13 @@ pub fn run(
     // The planner (Mpc mode only): on a worker thread in real time, inside
     // the cycle when the simulation runs as fast as it can.
     let mut mpc = if opts.mode == Mode::Mpc {
-        Some(crate::mpc_driver::MpcDriver::new(crate::assemble::mpc_planner(profile, arm)?, arm, profile.mpc.rate_hz, opts.fast))
+        let mut d = crate::mpc_driver::MpcDriver::new(crate::assemble::mpc_planner(profile, arm)?, arm, profile.mpc.rate_hz, opts.fast);
+        d.from_reference = match profile.mpc.replan_from_reference.as_slice() {
+            [] => None,
+            [dq, dv] => Some((*dq, *dv)),
+            _ => return Err("[mpc] replan_from_reference = [|Δq| rad, |Δv| rad/s]".into()),
+        };
+        Some(d)
     } else {
         None
     };

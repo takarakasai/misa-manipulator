@@ -65,6 +65,18 @@ pub fn chain_dynamics(
     friction: Option<&FrictionModel>,
     v_ref: Option<&DVector<f64>>,
 ) -> Dynamics {
+    chain_dynamics_with(c, formulation, friction, v_ref, None)
+}
+
+/// [`chain_dynamics`] with an extra torque `extra` (chain DOFs) the solution
+/// must also supply (folded into `h` like friction).
+pub fn chain_dynamics_with(
+    c: &ChainState,
+    formulation: Formulation,
+    friction: Option<&FrictionModel>,
+    v_ref: Option<&DVector<f64>>,
+    extra: Option<&DVector<f64>>,
+) -> Dynamics {
     let n = c.n();
     let nle = match friction {
         Some(f) => {
@@ -75,6 +87,10 @@ pub fn chain_dynamics(
             }
         }
         None => c.nle.clone(),
+    };
+    let nle = match extra {
+        Some(x) => nle + x,
+        None => nle,
     };
     Dynamics::new(formulation, &c.mass, &nle, &DMatrix::zeros(0, n), n)
 }

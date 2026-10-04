@@ -620,7 +620,8 @@ fn make_plant(
                 profile.sim.timestep_s,
                 friction,
                 profile.sim.friction_v_eps,
-            )?))
+            )?
+            .with_stiction(profile.sim.stiction)))
         }
     }
 }

@@ -275,5 +275,9 @@ pub fn mpc_planner(p: &RobotProfile, arm: &ArmModel) -> Result<Box<dyn manip_mpc
 
 /// The WBC that tracks the plan: `[osc]`'s safety, motor PD and solver settings.
 pub fn tracking_config(p: &RobotProfile, arm: &ArmModel) -> Result<manip_wbc::TrackingConfig, String> {
-    Ok(manip_wbc::TrackingConfig::from_osc(&osc_config(p, arm)?, p.mpc.track_omega))
+    let mut c = manip_wbc::TrackingConfig::from_osc(&osc_config(p, arm)?, p.mpc.track_omega);
+    let js = joints_in_order(p, arm);
+    c.ki = DVector::from_element(arm.n(), p.mpc.track_ki);
+    c.i_max = col(&js, |j| j.friction * p.mpc.track_i_max_friction);
+    Ok(c)
 }
