@@ -299,6 +299,17 @@ impl ArmModel {
 
     /// Builds all matrices for one cycle at once.
     pub fn evaluate(&self, q: &[f64], v: &[f64]) -> ArmState {
+        self.evaluate_impl(q, v, true)
+    }
+
+    /// [`Self::evaluate`] without `tcp_jdot_v` (left at zero). `J̇v` is a central
+    /// finite difference costing two more Jacobians; planners that linearize
+    /// many knots per cycle do not need it.
+    pub fn evaluate_without_jdot(&self, q: &[f64], v: &[f64]) -> ArmState {
+        self.evaluate_impl(q, v, false)
+    }
+
+    fn evaluate_impl(&self, q: &[f64], v: &[f64], with_jdot: bool) -> ArmState {
         let qf = self.full_q(q);
         let vf = self.full_v(v);
         let g = &self.g_proj;
@@ -313,7 +324,7 @@ impl ArmModel {
         let jac_full = frames::compute_frame_jacobian_from_data(&self.model, &qf, &data, &self.tcp);
         let vf_vec = DVector::from_column_slice(&vf);
         let twist = &jac_full * &vf_vec;
-        let jdot_v = self.frame_jdot_v(&qf, &vf);
+        let jdot_v = if with_jdot { self.frame_jdot_v(&qf, &vf) } else { Vector6::zeros() };
 
         let mut mass = &gt * mass_full * g;
         for (i, d) in self.dofs.iter().enumerate() {

@@ -168,7 +168,7 @@ impl Problem<'_> {
 
     fn eval(&self, q: &DVector<f64>, v: &DVector<f64>) -> Result<Eval, MpcError> {
         let (qf, vf) = self.full(q, v);
-        let s = self.arm.evaluate(&qf, &vf);
+        let s = self.arm.evaluate_without_jdot(&qf, &vf);
         let sub = |x: &DVector<f64>| DVector::from_iterator(self.n(), self.idx.iter().map(|&i| x[i]));
         let mut points = Vec::new();
         if let Some(ws) = &self.cfg.workspace {

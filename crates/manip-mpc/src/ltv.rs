@@ -127,6 +127,9 @@ pub struct LtvMpc {
     pub cfg: LtvConfig,
     prev: Option<JointPlan>,
     workspace: QpWorkspace,
+    /// Hessian of the state-independent cost terms (posture, velocity,
+    /// acceleration, acceleration change), keyed by what it depends on.
+    h_const: Option<(Vec<u64>, DMatrix<f64>)>,
 }
 
 impl LtvMpc {
@@ -135,6 +138,7 @@ impl LtvMpc {
             cfg,
             prev: None,
             workspace: QpWorkspace::new(),
+            h_const: None,
         }
     }
 
@@ -165,6 +169,14 @@ impl Cost {
         self.h += 2.0 * a.transpose() * &wa;
         self.g -= 2.0 * wa.transpose() * b;
         self.c0 += b.iter().zip(w.iter()).map(|(bi, wi)| wi * bi * bi).sum::<f64>();
+    }
+
+    /// [`Self::add`] for a term whose Hessian is already in `h` (only the
+    /// gradient and constant depend on `b`).
+    fn add_linear(&mut self, a: &DMatrix<f64>, b: &DVector<f64>, w: &DVector<f64>) {
+        let wb = b.component_mul(w);
+        self.g -= 2.0 * a.transpose() * &wb;
+        self.c0 += b.dot(&wb);
     }
 
     fn value(&self, u: &DVector<f64>) -> f64 {
@@ -272,7 +284,7 @@ impl LtvMpc {
             qf[i] = q[k];
             vf[i] = v[k];
         }
-        let s: ArmState = arm.evaluate(&qf, &vf);
+        let s: ArmState = arm.evaluate_without_jdot(&qf, &vf);
         let mut points = Vec::new();
         if let Some(ws) = &self.cfg.workspace {
             for (link, local) in &ws.points {
@@ -337,6 +349,30 @@ impl Planner for LtvMpc {
             u_prev_applied = p.sample(t).a;
         }
 
+        // Hessian of the state-independent terms, built once per configuration.
+        let key: Vec<u64> = [nh as f64, n as f64, h, cfg.w_posture, cfg.w_vel, cfg.terminal_scale, cfg.w_acc, cfg.w_jerk]
+            .iter()
+            .map(|x| x.to_bits())
+            .collect();
+        if self.h_const.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut c = Cost::new(nu);
+            for k in 1..=nh {
+                let term = if k == nh { cfg.terminal_scale } else { 1.0 };
+                c.add(&cond.gq[k], &DVector::zeros(n), &DVector::from_element(n, cfg.w_posture));
+                c.add(&cond.gv[k], &DVector::zeros(n), &DVector::from_element(n, term * cfg.w_vel));
+            }
+            for k in 0..nh {
+                let gu = cond.gu(k);
+                c.add(&gu, &DVector::zeros(n), &DVector::from_element(n, cfg.w_acc));
+                if cfg.w_jerk > 0.0 {
+                    let a = if k == 0 { gu } else { &gu - cond.gu(k - 1) };
+                    c.add(&a, &DVector::zeros(n), &DVector::from_element(n, cfg.w_jerk));
+                }
+            }
+            self.h_const = Some((key, c.h));
+        }
+        let h_const = self.h_const.as_ref().map(|(_, m)| m.clone()).expect("built above");
+
         let mut linearize_us = 0.0;
         let mut qp_us = 0.0;
         let mut iterations = 0;
@@ -352,6 +388,7 @@ impl Planner for LtvMpc {
             let p0: Vec<Vector3<f64>> = knots[0].points.iter().map(|(p, _)| *p).collect();
 
             let mut cost = Cost::new(nu);
+            cost.h = h_const.clone();
             let mut ineq = Ineq::default();
             let rows: std::ops::Range<usize> = if cfg.track_orientation { 0..6 } else { 3..6 };
             for (k, kn) in knots.iter().enumerate() {
@@ -367,11 +404,13 @@ impl Planner for LtvMpc {
                     let w = DVector::from_iterator(rows.len(), rows.clone().map(|r| term * if r < 3 { cfg.w_rot } else { cfg.w_pos }));
                     cost.add(&a, &b, &w);
                     // Posture and velocity.
-                    cost.add(&cond.gq[k], &(&posture - &cond.q_free[k]), &DVector::from_element(n, cfg.w_posture));
+                    cost.add_linear(&cond.gq[k], &(&posture - &cond.q_free[k]), &DVector::from_element(n, cfg.w_posture));
                     let sigma = j.clone().svd(false, false).singular_values.min();
                     let ramp = ((cfg.sing_sigma_hi - sigma) / (cfg.sing_sigma_hi - cfg.sing_sigma_lo).max(1e-12)).clamp(0.0, 1.0);
-                    let w_v = term * cfg.w_vel + cfg.w_sing * ramp * ramp;
-                    cost.add(&cond.gv[k], &(-&cond.v_free[k]), &DVector::from_element(n, w_v));
+                    cost.add_linear(&cond.gv[k], &(-&cond.v_free[k]), &DVector::from_element(n, term * cfg.w_vel));
+                    if ramp > 0.0 {
+                        cost.add(&cond.gv[k], &(-&cond.v_free[k]), &DVector::from_element(n, cfg.w_sing * ramp * ramp));
+                    }
                     // State limits.
                     ineq.range(&cond.gq[k], &cond.q_free[k], &q_lo, &q_hi);
                     ineq.range(&cond.gv[k], &cond.v_free[k], &(-&v_lim), &v_lim);
@@ -393,13 +432,8 @@ impl Planner for LtvMpc {
                 }
                 if k < nh {
                     let gu = cond.gu(k);
-                    cost.add(&gu, &DVector::zeros(n), &DVector::from_element(n, cfg.w_acc));
-                    if cfg.w_jerk > 0.0 {
-                        if k == 0 {
-                            cost.add(&gu, &u_prev_applied, &DVector::from_element(n, cfg.w_jerk));
-                        } else {
-                            cost.add(&(&gu - cond.gu(k - 1)), &DVector::zeros(n), &DVector::from_element(n, cfg.w_jerk));
-                        }
+                    if cfg.w_jerk > 0.0 && k == 0 {
+                        cost.add_linear(&gu, &u_prev_applied, &DVector::from_element(n, cfg.w_jerk));
                     }
                     ineq.range(&gu, &DVector::zeros(n), &(-&a_max), &a_max);
                     if cfg.torque_limits {
