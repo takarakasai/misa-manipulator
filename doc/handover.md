@@ -315,6 +315,33 @@ motorbridge で ID（1–7 / Master 0x11–0x17）とゼロ点（Motorbridge Stu
 
 ---
 
+## 5b. MPC + WBC の基盤（2026-10-04、シムのみ）
+
+- **manip-wbc**: OSC を部品に分けた（`ChainState`、`tasks`、`solve_levels`、
+  `MotorOutput`）。`Osc` は同じ API。作り直しはビット単位で同じ（作り直し前に記録した
+  OSC 3 本、計 14,430 フレームが `manip replay` で identical）。新しく
+  `JointTracking`（レベル 1 が関節軌道 `q̈ = a + Kp(q* − q) + Kd(v* − v)`、レベル 0 は
+  OSC と同じトルク・可動域 CBF・バリア）= MPC の計画を毎周期追う WBC。
+- **manip-mpc**: `LtvMpc`（`Planner` トレイト）。状態 [q; v]、入力 q̈（区間内一定）の
+  二重積分を凝縮した密な QP を misa-wbc の `solve_qp`（ActiveSet、反復上限で Clarabel
+  に切替）で解く。前回の計画をずらした軌道のまわりで毎回線形化（RTI。`sqp_iters`）:
+  TCP 誤差 `ē − J̄(q − q̄)`、トルク `M̄u + h̄`、作業領域の点 `p̄ + J̄p(q − q̄)`。
+  制約は加速度・速度・可動域（余白 0.02、いまの位置を含むよう広げる）・トルク
+  （effort × 0.9）・TCP 速度 0.3 m/s・作業領域の箱。状態制約で解けないときは入力と
+  トルクだけで解き直し `relaxed`。
+- 効いた工夫: **TCP 誤差の上限**（1 回の計画で 5 cm / 0.3 rad。無いと遠い目標で
+  ActiveSet が 2000 反復で止まる）、**TCP 速度の上限**（無いと 2 m/s で飛ぶ）、
+  **特異点の速度減衰**（σ_min が 0.06 → 0.01 で速度の重みを 10 まで上げる。無いと
+  届かない目標に向けて全関節が 4 rad/s で暴れる。OSC と同じ考え）。
+- シム（剛体、1 kHz、MPC 50 Hz + WBC 500 Hz）: 10 cm 先の目標に誤差 0.00 mm で停止、
+  床の箱で 0.8 mm の行き過ぎで停止、3 cm の円（0.2 Hz）を rms 0.00 mm（先読みが効く。
+  摩擦・遅れなしの理想シム）。計画 1 回（N = 20、dt 50 ms）は中央値 1.2 ms /
+  p95 1.9 ms（うち線形化 0.85 ms。`evaluate` が MPC に要らない J̇v を数値微分で作るぶん
+  削れる）。N = 30 は ActiveSet が詰まって p95 45 ms。
+- 既知: 届かない目標（基底の真上など）では、止まりきらず零空間で ~0.1 rad/s 揺れる
+  （姿勢が OSC のような厳密な下位レベルでなく弱いコストのため）。実機では未検証、
+  manip-runner には未組み込み。iLQR（misarta の解析微分）は同じ `Planner` で次に足す。
+
 ## 6. 未確定・次にやること
 
 - **グリッパの換算**: DM は実測 0.00844 m/rad（全開がモータ零から 5.92 rad、指の間隔

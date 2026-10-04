@@ -1470,6 +1470,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "manip-mpc"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "manip-control",
+ "manip-model",
+ "manip-wbc",
+ "misa-wbc",
+ "nalgebra",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "manip-plant-can"
 version = "0.1.0"
 dependencies = [

@@ -15,6 +15,7 @@ members = [
     "crates/manip-model",
     "crates/manip-control",
     "crates/manip-wbc",
+    "crates/manip-mpc",
     "crates/manip-leader",
     "crates/manip-plant-can",
     "crates/manip-runner",
@@ -36,6 +37,7 @@ authors = ["Takara Kasai <takara.kasai@gmail.com>"]
 manip-model = { path = "crates/manip-model" }
 manip-control = { path = "crates/manip-control" }
 manip-wbc = { path = "crates/manip-wbc" }
+manip-mpc = { path = "crates/manip-mpc" }
 manip-leader = { path = "crates/manip-leader" }
 manip-plant-can = { path = "crates/manip-plant-can" }
 

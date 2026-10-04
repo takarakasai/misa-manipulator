@@ -1,0 +1,23 @@
+# manip-mpc — model predictive control for fixed-base arms. No I/O.
+#
+# Plans a joint trajectory over a receding horizon (TCP target, joint /
+# velocity / acceleration / torque limits, workspace box) and hands it to a
+# whole-body controller (manip-wbc::JointTracking) that runs every cycle.
+[package]
+name = "manip-mpc"
+description = "Model predictive control for arms: linear time-varying MPC on a condensed QP (misa-wbc), joint-trajectory plans for manip-wbc. No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+manip-model = { workspace = true }
+manip-control = { workspace = true }
+manip-wbc = { workspace = true }
+misa-wbc = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

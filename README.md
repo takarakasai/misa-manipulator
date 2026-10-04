@@ -36,7 +36,9 @@
 ```
 crates/
 ├── manip-model/         misarta を腕向けに包む（独立自由度・TCP・M/h/g/J/J̇v）
-├── manip-control/       制御則（I/O なし）: 重力補償・関節インピーダンス・OSC・参照整形
+├── manip-control/       制御則（I/O なし）: 重力補償・関節インピーダンス・参照整形・摩擦
+├── manip-wbc/           全身制御（misa-wbc の階層 QP）: タスク部品・OSC・関節軌道の追従
+├── manip-mpc/           MPC: 加速度レベルの LTV-MPC（密な QP）→ 計画を manip-wbc で追う
 ├── manip-leader/        リーダー（Star Arm 102）と合成の目標源。別スレッドで読む
 ├── manip-plant-can/     実機: DAMIAO / RobStride の MIT を CAN で（バスごとに自由走行スレッド）
 ├── manip-plant-mujoco/  シム: articara の MuJoCo（ワークスペース外、`--features sim`）
