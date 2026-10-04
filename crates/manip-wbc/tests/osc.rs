@@ -106,14 +106,18 @@ fn wbc_starts_with_a_joint_past_its_limit() {
     }
 }
 
-/// Friction compensation with a reference: the smaller where the reference
-/// and the measured velocity agree in sign, nothing where they disagree.
+/// Friction compensation with a reference: at the reference velocity
+/// (also from standstill, to break away), except where the joint clearly
+/// moves the other way.
 #[test]
-fn agreed_friction_takes_the_smaller_agreeing_compensation() {
-    use manip_wbc::tasks::agreed_friction;
+fn gated_friction_follows_the_reference_unless_the_joint_opposes_it() {
+    use manip_control::FrictionModel;
+    use manip_wbc::tasks::gated_friction;
     use nalgebra::DVector;
-    let at_ref = DVector::from_vec(vec![1.4, -1.4, 0.0, 0.3, -0.2]);
-    let at_meas = DVector::from_vec(vec![0.5, -1.4, 1.4, -0.3, -1.0]);
-    let f = agreed_friction(&at_ref, &at_meas);
-    assert_eq!(f.as_slice(), &[0.5, -1.4, 0.0, 0.0, -0.2]);
+    let f = FrictionModel { coulomb: DVector::from_element(4, 1.0), viscous: DVector::zeros(4), v_eps: 0.05 };
+    let v_ref = DVector::from_vec(vec![1.0, 1.0, 1.0, 0.0]);
+    let v = DVector::from_vec(vec![0.0, -0.03, -0.2, 0.5]);
+    let g = gated_friction(&f, &v_ref, &v);
+    let full = (1.0f64 / 0.05).tanh();
+    assert_eq!(g.as_slice(), &[full, full, 0.0, 0.0]);
 }

@@ -34,8 +34,8 @@ pub struct TrackingConfig {
     pub kd: DVector<f64>,
     pub torque_reg: f64,
     pub torque_scale: f64,
-    /// Friction feedforward (where the reference and measured velocities
-    /// agree, see `tasks::agreed_friction`).
+    /// Friction feedforward at the reference velocity, gated by the measured
+    /// one (`tasks::gated_friction`).
     pub friction: Option<FrictionModel>,
     pub a_max: DVector<f64>,
     pub cbf_alpha: f64,

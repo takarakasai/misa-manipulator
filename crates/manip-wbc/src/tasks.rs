@@ -57,8 +57,8 @@ pub fn pose_error(target: &Isometry3<f64>, current: &Isometry3<f64>) -> Vector6<
 /// into `h`: plant `M·q̈ + h = τ − τ_friction` ⇒ plan with `h' = h + τ_friction`.
 ///
 /// Without a reference (OSC) it is evaluated at the measured velocity. With a
-/// reference velocity `v_ref` (chain DOFs) it is the smaller of the two
-/// compensations where they agree in sign, else 0 ([`agreed_friction`]).
+/// reference velocity `v_ref` (chain DOFs), at the reference unless the joint
+/// clearly moves the other way ([`gated_friction`]).
 pub fn chain_dynamics(
     c: &ChainState,
     formulation: Formulation,
@@ -69,10 +69,9 @@ pub fn chain_dynamics(
     let nle = match friction {
         Some(f) => {
             let f = f.select(&c.idx);
-            let at_meas = f.compensation(&c.v);
             match v_ref {
-                Some(vr) => &c.nle + agreed_friction(&f.compensation(vr), &at_meas),
-                None => &c.nle + at_meas,
+                Some(vr) => &c.nle + gated_friction(&f, vr, &c.v),
+                None => &c.nle + f.compensation(&c.v),
             }
         }
         None => c.nle.clone(),
@@ -80,18 +79,28 @@ pub fn chain_dynamics(
     Dynamics::new(formulation, &c.mass, &nle, &DMatrix::zeros(0, n), n)
 }
 
-/// Friction compensation from its values at the reference (`at_ref`) and the
-/// measured (`at_meas`) velocity: per joint the smaller where they agree in
-/// sign, else 0 (friction then only damps).
+/// Friction compensation at the reference velocity `v_ref`, zero on joints
+/// whose measured velocity `v` opposes it by more than the model's `v_eps`
+/// (friction then only damps).
 ///
-/// On the real B601-DM in Mpc mode: at the measured velocity alone an
-/// over-estimated Coulomb term is negative damping around v = 0 (slope
-/// `coulomb / v_eps` = 28 N·m·s/rad on joint2 vs motor kd 3), and folded
-/// joint2/joint4 swung ±1° at 2 Hz; at the reference velocity alone (the plan
-/// starts from the measured state, and the arm lags it) fast teleop shook at
-/// 3–8 Hz with 2.5–3× the torque swing.
-pub fn agreed_friction(at_ref: &DVector<f64>, at_meas: &DVector<f64>) -> DVector<f64> {
-    at_ref.zip_map(at_meas, |r, m| if r * m > 0.0 { r.signum() * r.abs().min(m.abs()) } else { 0.0 })
+/// On the real B601-DM in Mpc mode:
+/// - at the measured velocity, an over-estimated Coulomb term is negative
+///   damping around v = 0 (slope `coulomb / v_eps` = 28 N·m·s/rad on joint2
+///   vs motor kd 3): folded, joint2/joint4 swung ±1° at 2 Hz;
+/// - at the reference velocity alone, fast teleop shook at 3–8 Hz with 2.5–3×
+///   the torque swing (the arm lags the plan, which starts from the measured
+///   state, so at reversals the reference sign is wrong);
+/// - the smaller of the two where they agree is zero at standstill, so the
+///   arm could not break away (stiction ~1.75 N·m) and stuck mid-way.
+pub fn gated_friction(f: &FrictionModel, v_ref: &DVector<f64>, v: &DVector<f64>) -> DVector<f64> {
+    let eps = f.v_eps.max(1e-6);
+    let mut out = f.compensation(v_ref);
+    for i in 0..out.len() {
+        if out[i] * v[i] < 0.0 && v[i].abs() > eps {
+            out[i] = 0.0;
+        }
+    }
+    out
 }
 
 /// Joint limits as an exponential CBF on `q̈` (position, velocity) plus an
