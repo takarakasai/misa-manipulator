@@ -253,6 +253,9 @@ pub fn mpc_planner(p: &RobotProfile, arm: &ArmModel) -> Result<Box<dyn manip_mpc
                 c.dt = m.dt;
             }
             c.a_max = col(&js, |j| j.a_max);
+            if m.sqp_iters > 0 {
+                c.sqp_iters = m.sqp_iters;
+            }
             c.tcp_v_max = Some(m.tcp_v_max);
             c.workspace = workspace;
             Ok(Box::new(manip_mpc::LtvMpc::new(c)))

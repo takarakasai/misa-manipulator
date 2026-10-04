@@ -83,6 +83,12 @@ pub struct MpcSection {
     /// always from the measurement.
     #[serde(default)]
     pub replan_from_reference: Vec<f64>,
+    /// LTV: QP solves per plan, re-linearizing around each solution; 0 = the
+    /// planner's default. One step from the previous plan can be far off near
+    /// a singularity: at the folded B601-DM, every other plan sent joint2 to
+    /// its limit and the arm swung ±1° at rest; 3 converge to the target.
+    #[serde(default)]
+    pub sqp_iters: usize,
     /// Integral action of the tracking WBC [N·m/(rad·s)]; 0 = off.
     #[serde(default)]
     pub track_ki: f64,
@@ -104,6 +110,7 @@ impl Default for MpcSection {
             target_lookahead_s: 0.0,
             target_v_tau_s: 0.05,
             replan_from_reference: Vec::new(),
+            sqp_iters: 0,
             track_ki: 0.0,
             track_i_max_friction: 1.5,
         }
