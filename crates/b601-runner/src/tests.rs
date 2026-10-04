@@ -986,3 +986,22 @@ fn mpc_mode_without_target_holds_the_tcp() {
     assert!(xyz[0].len() > 1000);
     assert!(spread < 3e-3, "TCP drifted {spread}");
 }
+
+/// The state where MPC teleop fell back to Hold on the real arm (folding
+/// back: shoulder 0.19° below its upper limit, moving toward it). misa-wbc's
+/// ActiveSet calls level 0 Infeasible here although Clarabel solves it; the
+/// WBC now retries with Clarabel and gets a solution that brakes the shoulder.
+#[test]
+fn wbc_solves_the_state_activeset_called_infeasible() {
+    let (p, arm) = robot("rebot_b601_dm");
+    let q = [-0.035668373107910156, -0.00324249267578125, -0.02193450927734375, -0.055886268615722656, 0.02193450927734375, 0.02231597900390625, 0.00014971160888671873];
+    let v = [-0.0073261260986328125, 0.0610504150390625, -0.0024423599243164063, -0.40293121337890625, 0.007328033447265625, 0.036632537841796875, 6.183250427246093e-5];
+    let s = arm.evaluate(&q, &v);
+    let cbfs = assemble::supervisor_config(&p, &arm).unwrap().safety.unwrap().cbfs(&arm, &s);
+    let mut wbc = manip_wbc::JointTracking::new(assemble::tracking_config(&p, &arm).unwrap());
+    let r = manip_control::JointRef::at_rest(s.q.clone());
+    let base = manip_control::JointCommand { axes: vec![Default::default(); arm.n()] };
+    let (_, rep) = wbc.command(&arm, &s, &r, 0.002, base, &cbfs).expect("solvable");
+    let j2 = arm.dof("joint2").unwrap();
+    assert!(rep.qddot[j2] < -0.89, "shoulder must brake toward its limit: {}", rep.qddot[j2]);
+}

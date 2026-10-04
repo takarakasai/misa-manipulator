@@ -31,6 +31,12 @@ pub struct Solved {
 /// Solve `levels`, accept degradation only of levels `>= accept_from`, and
 /// reject solutions whose `|τ|` exceeds `tau_max × check` (a single cycle may
 /// yield an inconsistent solution, measured on keel in misa-runner).
+///
+/// If a level that must hold degrades with the active-set backend, the stack
+/// is solved once more with Clarabel: on the real B601-DM, folding back during
+/// MPC teleop, misa-wbc's ActiveSet reported level 0 Infeasible for a feasible
+/// problem (Clarabel solved it; tolerances, iteration limits and the HQP
+/// strategy made no difference). Solutions found the first time are unchanged.
 pub fn solve_levels(
     solver: &mut Solver,
     d: &Dynamics,
@@ -41,7 +47,18 @@ pub fn solve_levels(
     check: f64,
 ) -> Result<Solved, WbcError> {
     let t_solve = std::time::Instant::now();
-    let sol = solver.solve(levels, cfg).map_err(|e| WbcError::Setup(format!("{e:?}")))?;
+    let mut sol = solver.solve(levels, cfg).map_err(|e| WbcError::Setup(format!("{e:?}")))?;
+    if let SolveStatus::Degraded { level, .. } = &sol.status
+        && *level < accept_from
+        && cfg.backend == misa_wbc::QpSolver::ActiveSet
+    {
+        let retry = SolveConfig { backend: misa_wbc::QpSolver::Clarabel, ..cfg.clone() };
+        let alt = Solver::new().solve(levels, &retry).map_err(|e| WbcError::Setup(format!("{e:?}")))?;
+        if !matches!(&alt.status, SolveStatus::Degraded { level, .. } if *level < accept_from) {
+            solver.reset();
+            sol = alt;
+        }
+    }
     let mut degraded = None;
     if let SolveStatus::Degraded { level, status } = &sol.status {
         degraded = Some(format!("level {level}: {status:?}"));

@@ -84,9 +84,14 @@ pub struct JointLimitParams {
 pub fn physics_and_limits(c: &ChainState, d: &Dynamics, tau_max: &DVector<f64>, jl: &JointLimitParams) -> Task {
     let n = c.n();
     let big = 1e3;
+    // The range is widened to include the current position: an arm resting
+    // on its stop reads past the limit (the B601-DM shoulder by ~1° when
+    // folded), and a barrier that demands pulling back at once is infeasible
+    // with the acceleration and velocity bounds. Moving further out is still
+    // refused.
     let cbf = JointLimitCbf {
-        q_min: DVector::from_iterator(n, c.dofs.iter().map(|d| finite_or(d.q_min, -big))),
-        q_max: DVector::from_iterator(n, c.dofs.iter().map(|d| finite_or(d.q_max, big))),
+        q_min: DVector::from_iterator(n, c.dofs.iter().zip(c.q.iter()).map(|(d, &q)| finite_or(d.q_min, -big).min(q))),
+        q_max: DVector::from_iterator(n, c.dofs.iter().zip(c.q.iter()).map(|(d, &q)| finite_or(d.q_max, big).max(q))),
         v_max: DVector::from_iterator(n, c.dofs.iter().map(|d| finite_or(d.v_max * jl.v_scale, big))),
         a_max: jl.a_max.clone(),
         alpha1: DVector::from_element(n, jl.alpha),

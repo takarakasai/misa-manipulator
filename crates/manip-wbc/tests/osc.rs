@@ -80,3 +80,28 @@ fn osc_cbf_stops_at_joint_limit() {
     assert!(v.amax() < 0.05, "still moving: {}", v.amax());
     assert!(degraded < 20, "too many degraded ticks: {degraded}");
 }
+
+/// An arm resting slightly past a joint limit (the folded B601-DM shoulder
+/// reads ~1° over) still gets a solution, and the joint does not go further out.
+#[test]
+fn wbc_starts_with_a_joint_past_its_limit() {
+    use manip_wbc::{JointTracking, TrackingConfig};
+    let arm = model("rebot_b601_dm", "end_link");
+    let n = arm.n();
+    let mut q0 = DVector::from_row_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let j2 = arm.dof("joint2").unwrap();
+    q0[j2] = arm.dofs()[j2].q_max + 1f64.to_radians();
+    let mut wbc = JointTracking::new(TrackingConfig::from_osc(&OscConfig::defaults(n), 20.0));
+    let grip = JointImpedance::new(JointGains::uniform(n, 200.0, 5.0), Feedforward::Gravity);
+    let r = JointRef::at_rest(q0.clone());
+    let (mut q, mut v) = (q0.clone(), DVector::zeros(n));
+    let mut cmd = Default::default();
+    for k in 0..1000 {
+        if k % CTRL_EVERY == 0 {
+            let s = arm.evaluate(q.as_slice(), v.as_slice());
+            cmd = wbc.command(&arm, &s, &r, PHYS_DT * CTRL_EVERY as f64, grip.command(&arm, &s, &r), &[]).expect("solvable past the limit").0;
+        }
+        step(&arm, &mut q, &mut v, &cmd);
+        assert!(q[j2] <= q0[j2] + 1e-3, "joint2 went further out: {}", q[j2]);
+    }
+}
