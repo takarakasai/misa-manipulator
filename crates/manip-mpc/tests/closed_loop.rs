@@ -4,7 +4,7 @@
 
 use manip_control::{Feedforward, JointCommand, JointGains, JointImpedance, JointRef};
 use manip_model::{ArmModel, TcpSpec};
-use manip_mpc::{LtvConfig, LtvMpc, MpcGoal, Planner, WorkspaceBox};
+use manip_mpc::{IlqrConfig, IlqrMpc, LtvConfig, LtvMpc, MpcGoal, Planner, WorkspaceBox};
 use manip_wbc::{JointTracking, OscConfig, TrackingConfig};
 use nalgebra::{DVector, Isometry3, Translation3, Vector3};
 
@@ -47,9 +47,8 @@ struct Run {
 }
 
 /// Run MPC + WBC toward `goal` for `steps` physics steps.
-fn run(arm: &ArmModel, q0: &DVector<f64>, goal: Isometry3<f64>, mpc_cfg: LtvConfig, steps: usize, floor_point: Option<(&str, Vector3<f64>)>) -> Run {
+fn run(arm: &ArmModel, q0: &DVector<f64>, goal: Isometry3<f64>, mpc: &mut dyn Planner, steps: usize, floor_point: Option<(&str, Vector3<f64>)>) -> Run {
     let n = arm.n();
-    let mut mpc = LtvMpc::new(mpc_cfg);
     let mut wbc = JointTracking::new(TrackingConfig::from_osc(&OscConfig::defaults(n), 20.0));
     let grip = JointImpedance::new(JointGains::uniform(n, 200.0, 5.0), Feedforward::Gravity);
     let hold = JointRef::at_rest(q0.clone());
@@ -102,6 +101,9 @@ fn run(arm: &ArmModel, q0: &DVector<f64>, goal: Isometry3<f64>, mpc_cfg: LtvConf
         let tau = step(arm, &mut q, &mut v, &cmd);
         if k + 1000 >= steps {
             out.last_v_max = out.last_v_max.max(v.rows(0, 6).amax());
+            if std::env::var("MPC_TRACE").is_ok() && k % 20 == 0 {
+                eprintln!("last t={t:.3} v={:?}", v.as_slice()[..6].iter().map(|x| (x * 100.0).round() / 100.0).collect::<Vec<_>>());
+            }
             let p = arm.tcp_pose(q.as_slice()).translation.vector;
             let p0 = *tcp_mark.get_or_insert(p);
             out.last_tcp_travel = out.last_tcp_travel.max((p - p0).norm());
@@ -142,7 +144,7 @@ fn mpc_wbc_reaches_tcp_target() {
         Translation3::from(s0.tcp_pose.translation.vector + Vector3::new(0.05, 0.08, -0.04)),
         s0.tcp_pose.rotation,
     );
-    let r = run(&arm, &q0, goal, LtvConfig::defaults(arm.n()), 3000, None);
+    let r = run(&arm, &q0, goal, &mut LtvMpc::new(LtvConfig::defaults(arm.n())), 3000, None);
     let s = arm.evaluate(r.q.as_slice(), r.v.as_slice());
     let pos_err = (s.tcp_pose.translation.vector - goal.translation.vector).norm();
     let rot_err = s.tcp_pose.rotation.angle_to(&goal.rotation);
@@ -165,7 +167,7 @@ fn mpc_stays_bounded_toward_unreachable_target() {
     let q0 = ready();
     let s0 = arm.evaluate(q0.as_slice(), &vec![0.0; arm.n()]);
     let goal = Isometry3::from_parts(Translation3::new(0.0, 0.0, 1.5), s0.tcp_pose.rotation);
-    let r = run(&arm, &q0, goal, LtvConfig::defaults(arm.n()), 6000, None);
+    let r = run(&arm, &q0, goal, &mut LtvMpc::new(LtvConfig::defaults(arm.n())), 6000, None);
     eprintln!("last second: |v| max {:.3}, TCP travel {:.4} m, failures {}", r.last_v_max, r.last_tcp_travel, r.failures);
     assert_eq!(r.failures, 0);
     assert!(r.last_v_max < 0.3, "joints still fast: {}", r.last_v_max);
@@ -190,7 +192,7 @@ fn mpc_respects_workspace_floor() {
         min: Vector3::new(-2.0, -2.0, floor),
         max: Vector3::new(2.0, 2.0, 2.0),
     });
-    let r = run(&arm, &q0, goal, cfg, 3000, Some(("end_link", Vector3::zeros())));
+    let r = run(&arm, &q0, goal, &mut LtvMpc::new(cfg), 3000, Some(("end_link", Vector3::zeros())));
     eprintln!("floor {floor:.4}, min z {:.4}", r.min_point_z);
     assert!(r.min_point_z > floor - 0.003, "went through the floor: {} < {floor}", r.min_point_z);
     assert!(r.min_point_z < floor + 0.01, "did not reach the floor: {}", r.min_point_z);
@@ -244,6 +246,12 @@ fn plan_respects_limits() {
 /// horizon (preview), so the TCP follows with millimetre error.
 #[test]
 fn mpc_follows_moving_target_with_preview() {
+    let rms = circle_rms(&mut LtvMpc::new(LtvConfig::defaults(model().n())));
+    assert!(rms < 1.5e-3, "rms {rms}");
+}
+
+/// TCP rms error following a 3 cm circle at 0.2 Hz (after a 2 s lead-in).
+fn circle_rms(mpc: &mut dyn Planner) -> f64 {
     let arm = model();
     let n = arm.n();
     let q0 = ready();
@@ -254,7 +262,6 @@ fn mpc_follows_moving_target_with_preview() {
         let ramp = (t / 1.0).min(1.0);
         Isometry3::from_parts(Translation3::from(p0 + Vector3::new(0.0, 0.03 * (w * t).sin(), 0.03 * ((w * t).cos() - 1.0)) * ramp), rot)
     };
-    let mut mpc = LtvMpc::new(LtvConfig::defaults(n));
     let mut wbc = JointTracking::new(TrackingConfig::from_osc(&OscConfig::defaults(n), 20.0));
     let grip = JointImpedance::new(JointGains::uniform(n, 200.0, 5.0), Feedforward::Gravity);
     let hold = JointRef::at_rest(q0.clone());
@@ -283,5 +290,76 @@ fn mpc_follows_moving_target_with_preview() {
     }
     let rms = (se / cnt as f64).sqrt();
     eprintln!("circle tracking: rms {:.2} mm, max {:.2} mm", rms * 1e3, emax * 1e3);
+    rms
+}
+
+// ── iLQR (torque-level nonlinear MPC) through the same WBC ──────────────
+
+/// iLQR carries the TCP to a target 10 cm away and holds it there.
+#[test]
+fn ilqr_wbc_reaches_tcp_target() {
+    let arm = model();
+    let q0 = ready();
+    let s0 = arm.evaluate(q0.as_slice(), &vec![0.0; arm.n()]);
+    let goal = Isometry3::from_parts(
+        Translation3::from(s0.tcp_pose.translation.vector + Vector3::new(0.05, 0.08, -0.04)),
+        s0.tcp_pose.rotation,
+    );
+    let r = run(&arm, &q0, goal, &mut IlqrMpc::new(IlqrConfig::defaults()), 3000, None);
+    let s = arm.evaluate(r.q.as_slice(), r.v.as_slice());
+    let pos_err = (s.tcp_pose.translation.vector - goal.translation.vector).norm();
+    let rot_err = s.tcp_pose.rotation.angle_to(&goal.rotation);
+    eprintln!("ilqr: pos {pos_err:.5} m, rot {rot_err:.5} rad, |v| {:.4}, plan max {:.0} µs, failures {}", r.v.amax(), r.max_plan_us, r.failures);
+    assert_eq!(r.failures, 0);
+    assert!(pos_err < 2e-3, "position error {pos_err}");
+    assert!(rot_err < 1e-2, "rotation error {rot_err}");
+    assert!(r.v.amax() < 0.02, "still moving {}", r.v.amax());
+}
+
+/// iLQR follows the moving target (preview through the horizon).
+#[test]
+fn ilqr_follows_moving_target_with_preview() {
+    let rms = circle_rms(&mut IlqrMpc::new(IlqrConfig::defaults()));
     assert!(rms < 1.5e-3, "rms {rms}");
+}
+
+/// iLQR toward an unreachable target stays bounded and inside the joint range.
+/// Looser than the LTV-MPC: plan to plan, the wrist roll switches between a
+/// few constant speeds (up to ~1.3 rad/s) while the TCP stays put — the
+/// orientation cannot be met there and a few iterations per plan do not settle
+/// the near-free roll. Reachable targets do not show it.
+#[test]
+fn ilqr_stays_bounded_toward_unreachable_target() {
+    let arm = model();
+    let q0 = ready();
+    let s0 = arm.evaluate(q0.as_slice(), &vec![0.0; arm.n()]);
+    let goal = Isometry3::from_parts(Translation3::new(0.0, 0.0, 1.5), s0.tcp_pose.rotation);
+    let r = run(&arm, &q0, goal, &mut IlqrMpc::new(IlqrConfig::defaults()), 6000, None);
+    eprintln!("ilqr last second: |v| max {:.3}, TCP travel {:.4} m, failures {}", r.last_v_max, r.last_tcp_travel, r.failures);
+    assert_eq!(r.failures, 0);
+    assert!(r.last_v_max < 2.0, "joints too fast: {}", r.last_v_max);
+    assert!(r.last_tcp_travel < 0.02, "TCP still travelling: {}", r.last_tcp_travel);
+}
+
+/// iLQR with the workspace floor as a soft constraint: the TCP stays within a
+/// few millimetres of the floor (the WBC adds no barrier here).
+#[test]
+fn ilqr_keeps_near_workspace_floor() {
+    let arm = model();
+    let q0 = ready();
+    let s0 = arm.evaluate(q0.as_slice(), &vec![0.0; arm.n()]);
+    let floor = s0.tcp_pose.translation.z - 0.06;
+    let goal = Isometry3::from_parts(
+        Translation3::from(s0.tcp_pose.translation.vector + Vector3::new(0.0, 0.0, -0.15)),
+        s0.tcp_pose.rotation,
+    );
+    let mut cfg = IlqrConfig::defaults();
+    cfg.workspace = Some(WorkspaceBox {
+        points: vec![("end_link".into(), Vector3::zeros())],
+        min: Vector3::new(-2.0, -2.0, floor),
+        max: Vector3::new(2.0, 2.0, 2.0),
+    });
+    let r = run(&arm, &q0, goal, &mut IlqrMpc::new(cfg), 3000, Some(("end_link", Vector3::zeros())));
+    eprintln!("ilqr floor {floor:.4}, min z {:.4}", r.min_point_z);
+    assert!(r.min_point_z > floor - 0.005, "went through the floor: {} < {floor}", r.min_point_z);
 }

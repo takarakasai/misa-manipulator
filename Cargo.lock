@@ -1478,6 +1478,7 @@ dependencies = [
  "manip-model",
  "manip-wbc",
  "misa-wbc",
+ "misarta",
  "nalgebra",
  "thiserror 2.0.21",
 ]

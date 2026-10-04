@@ -1,10 +1,10 @@
-//! Wall time of one LTV-MPC plan on the B601-DM (warm-started, replanning
+//! Wall time of one plan (LTV-MPC, iLQR) on the B601-DM (warm-started, replanning
 //! every 20 ms toward a target 10 cm away), per horizon length.
 //!
 //!     cargo run --release -p manip-mpc --example mpc_bench
 
 use manip_model::{ArmModel, TcpSpec};
-use manip_mpc::{LtvConfig, LtvMpc, MpcGoal, Planner};
+use manip_mpc::{IlqrConfig, IlqrMpc, LtvConfig, LtvMpc, MpcGoal, Planner};
 use nalgebra::{DVector, Isometry3, Translation3, Vector3};
 
 fn main() {
@@ -18,12 +18,21 @@ fn main() {
         s0.tcp_pose.rotation,
     );
     let target = move |_t: f64| goal;
-    println!("{:>8} {:>6} {:>10} {:>10} {:>10} {:>10}", "horizon", "dt", "median us", "p95 us", "lin us", "qp us");
+    println!("{:>6} {:>8} {:>6} {:>10} {:>10} {:>10} {:>10}", "", "horizon", "dt", "median us", "p95 us", "lin us", "solve us");
+    let mut planners: Vec<(&str, usize, f64, Box<dyn Planner>)> = Vec::new();
     for (horizon, dt) in [(10, 0.05), (20, 0.05), (30, 0.05), (20, 0.025)] {
         let mut cfg = LtvConfig::defaults(n);
         cfg.horizon = horizon;
         cfg.dt = dt;
-        let mut mpc = LtvMpc::new(cfg);
+        planners.push(("ltv", horizon, dt, Box::new(LtvMpc::new(cfg))));
+    }
+    for (horizon, dt) in [(15, 0.04), (25, 0.04)] {
+        let mut cfg = IlqrConfig::defaults();
+        cfg.horizon = horizon;
+        cfg.dt = dt;
+        planners.push(("ilqr", horizon, dt, Box::new(IlqrMpc::new(cfg))));
+    }
+    for (name, horizon, dt, mut mpc) in planners {
         let (mut q, mut v) = (q0.clone(), DVector::zeros(n));
         let mut times = Vec::new();
         let (mut lin, mut qp) = (0.0, 0.0);
@@ -43,7 +52,8 @@ fn main() {
         let m = times.len() as f64;
         times.sort_by(|a, b| a.partial_cmp(b).unwrap());
         println!(
-            "{:>8} {:>6.3} {:>10.0} {:>10.0} {:>10.0} {:>10.0}",
+            "{:>6} {:>8} {:>6.3} {:>10.0} {:>10.0} {:>10.0} {:>10.0}",
+            name,
             horizon,
             dt,
             times[times.len() / 2],

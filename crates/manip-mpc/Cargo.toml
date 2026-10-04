@@ -5,7 +5,7 @@
 # whole-body controller (manip-wbc::JointTracking) that runs every cycle.
 [package]
 name = "manip-mpc"
-description = "Model predictive control for arms: linear time-varying MPC on a condensed QP (misa-wbc), joint-trajectory plans for manip-wbc. No I/O."
+description = "Model predictive control for arms: linear time-varying MPC on a condensed QP (misa-wbc) and torque-level iLQR (misarta analytical derivatives); joint-trajectory plans for manip-wbc. No I/O."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,7 @@ manip-model = { workspace = true }
 manip-control = { workspace = true }
 manip-wbc = { workspace = true }
 misa-wbc = { workspace = true }
+misarta = { workspace = true }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
 

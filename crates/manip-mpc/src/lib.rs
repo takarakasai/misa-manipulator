@@ -18,13 +18,17 @@
 //! Implementations:
 //! - [`LtvMpc`]: linear time-varying MPC at the acceleration level, one dense
 //!   QP per period (misa-wbc), real-time iteration around the previous plan.
+//! - [`IlqrMpc`]: torque-level nonlinear MPC (iLQR) on the full rigid-body
+//!   dynamics with misarta's analytical derivatives; soft state constraints.
 //!
 //! No I/O; time is the caller's clock in seconds.
 
 pub mod condense;
+pub mod ilqr;
 pub mod ltv;
 pub mod plan;
 
+pub use ilqr::{IlqrConfig, IlqrMpc};
 pub use ltv::{LtvConfig, LtvMpc, WorkspaceBox};
 pub use plan::JointPlan;
 
