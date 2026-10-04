@@ -193,6 +193,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "b601-runner"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ctrlc",
+ "env_logger",
+ "libc",
+ "log",
+ "manip-control",
+ "manip-leader",
+ "manip-model",
+ "manip-plant-can",
+ "manip-plant-mujoco",
+ "manip-wbc",
+ "misa-actuator",
+ "misa-core",
+ "misa-wbc",
+ "nalgebra",
+ "postcard",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1503,30 +1527,6 @@ dependencies = [
  "log",
  "misa-core",
  "mujoco-rs",
-]
-
-[[package]]
-name = "manip-runner"
-version = "0.1.0"
-dependencies = [
- "clap",
- "ctrlc",
- "env_logger",
- "libc",
- "log",
- "manip-control",
- "manip-leader",
- "manip-model",
- "manip-plant-can",
- "manip-plant-mujoco",
- "manip-wbc",
- "misa-actuator",
- "misa-core",
- "misa-wbc",
- "nalgebra",
- "postcard",
- "serde",
- "toml",
 ]
 
 [[package]]

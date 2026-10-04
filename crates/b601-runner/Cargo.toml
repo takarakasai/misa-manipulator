@@ -1,6 +1,6 @@
-# manip-runner — the application. Reads a profile, assembles the Plant, control law and leader, and runs them.
+# b601-runner — the application. Reads a profile, assembles the Plant, control law and leader, and runs them.
 [package]
-name = "manip-runner"
+name = "b601-runner"
 description = "Model-based manipulator control application (teleoperation, gravity compensation, OSC)."
 version.workspace = true
 edition.workspace = true

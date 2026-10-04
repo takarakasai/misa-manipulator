@@ -21,7 +21,7 @@
 //! # About going limp
 //!
 //! [`Plant::disarm`] disables the motors. **The arm will fall.** Folding the arm
-//! before calling it is the upper layer's job (manip-runner's Park). DAMIAO may
+//! before calling it is the upper layer's job (b601-runner's Park). DAMIAO may
 //! re-energize on the next frame even after disable (misa-actuator handover §2),
 //! so cut the power when you really need it stopped.
 //!

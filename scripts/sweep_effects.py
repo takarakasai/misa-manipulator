@@ -12,7 +12,7 @@ and reports tracking error and a chatter metric:
 - fallback:       ticks where the OSC could not solve and dropped to Hold.
 
 Usage (from the repo root, after
-`cargo build --release -p manip-runner --features sim`):
+`cargo build --release -p b601-runner --features sim`):
 
     scripts/sweep_effects.py [--robots dm,rs] [--delays 0,1,2,3,4]
 """

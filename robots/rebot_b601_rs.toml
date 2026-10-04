@@ -183,7 +183,7 @@ ground = false
 joint_limits = true
 
 # What the CAN arm does that the simulator does not (see
-# crates/manip-runner/src/effects.rs). `manip run ... --ideal` turns it off.
+# crates/b601-runner/src/effects.rs). `manip run ... --ideal` turns it off.
 # - command_delay_ticks: the bus thread picks up a new command up to one bus
 #   cycle later (~1 tick at 500 Hz with 7 motors on 1 Mbps CAN; estimate).
 # - jitter_probability: ticks where the command misses the bus cycle.

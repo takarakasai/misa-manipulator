@@ -42,7 +42,7 @@ crates/
 ├── manip-leader/        リーダー（Star Arm 102）と合成の目標源。別スレッドで読む
 ├── manip-plant-can/     実機: DAMIAO / RobStride の MIT を CAN で（バスごとに自由走行スレッド）
 ├── manip-plant-mujoco/  シム: articara の MuJoCo（ワークスペース外、`--features sim`）
-├── manip-runner/        アプリ `manip`（プロファイル → 組み立て → 状態機械 → ループ）
+├── b601-runner/        アプリ `manip`（プロファイル → 組み立て → 状態機械 → ループ）
 └── manip-tools/         manip-import（URDF → .misa、メッシュ間引き）/ manip-inspect
 models/    取り込んだモデル（手で編集しない。scripts/import-models.sh で作り直す）
 robots/    フォロワーのプロファイル（ゲイン・可動域・モータ割り当て・テレオペの写像）
@@ -62,7 +62,7 @@ cargo test --release --workspace
 # MuJoCo シム（MuJoCo 3.8 が要る）
 export MUJOCO_DYNAMIC_LINK_DIR=$HOME/.mujoco/mujoco-3.8.0/lib
 export LD_LIBRARY_PATH=$MUJOCO_DYNAMIC_LINK_DIR
-cargo build --release -p manip-runner --features sim
+cargo build --release -p b601-runner --features sim
 ```
 
 依存は GitHub の git 依存（`git clone && cargo build` だけで立つ）。兄弟

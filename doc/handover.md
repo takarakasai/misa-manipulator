@@ -129,7 +129,7 @@ articara に手を入れる必要があった（2026-09-27 時点で articara �
 ## 3. 実機の「悪さ」を入れたシムでの評価（2026-09-27）
 
 シムは既定で `[sim.effects]` を掛ける（`--ideal` で外す）。中身は
-`crates/manip-runner/src/effects.rs`:
+`crates/b601-runner/src/effects.rs`:
 
 - **指令の遅延**（既定 1 tick = 2 ms。7 台を 1 Mbps の CAN で巡回するバス
   スレッドの 1 周の目安、**推定**）と**ジッタ**（既定 10 % で 1 tick 追加）
@@ -340,7 +340,7 @@ motorbridge で ID（1–7 / Master 0x11–0x17）とゼロ点（Motorbridge Stu
   削れる）。N = 30 は ActiveSet が詰まって p95 45 ms。
 - 既知: 届かない目標（基底の真上など）では、止まりきらず零空間で ~0.1 rad/s 揺れる
   （姿勢が OSC のような厳密な下位レベルでなく弱いコストのため）。実機では未検証、
-  manip-runner には未組み込み。
+  b601-runner には未組み込み。
 - **iLQR**（`IlqrMpc`、同じ `Planner`・同じ `JointPlan` を `JointTracking` で追う）:
   入力はトルク、`q̈ = M⁻¹(τ − h)`（manip-model の M、ロータ慣性込み）。線形化は
   misarta の **RNEA の解析微分**から `∂q̈/∂q = −M⁻¹∂ID/∂q` など（数値微分と一致を

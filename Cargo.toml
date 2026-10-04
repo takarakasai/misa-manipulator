@@ -18,12 +18,12 @@ members = [
     "crates/manip-mpc",
     "crates/manip-leader",
     "crates/manip-plant-can",
-    "crates/manip-runner",
+    "crates/b601-runner",
     "crates/manip-tools",
 ]
 # **Crates that require MuJoCo are not workspace members.** Otherwise
 # `cargo test --workspace` fails on machines without MuJoCo installed. They are
-# pulled in as path dependencies only when manip-runner's `sim` feature is
+# pulled in as path dependencies only when b601-runner's `sim` feature is
 # enabled (same as misa-runner).
 exclude = ["crates/manip-plant-mujoco"]
 

@@ -1,7 +1,7 @@
 # manip-plant-mujoco — exposes articara's MuJoCo as an arm Plant.
 #
 # **Not a workspace member** (otherwise `cargo test` fails on machines without
-# MuJoCo). Pulled in as a path dependency only from manip-runner's `sim` feature.
+# MuJoCo). Pulled in as a path dependency only from b601-runner's `sim` feature.
 # Workspace inheritance (`workspace = true`) is unavailable, so versions are
 # written out directly.
 #
