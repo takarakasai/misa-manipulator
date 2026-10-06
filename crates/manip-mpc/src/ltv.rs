@@ -84,7 +84,10 @@ pub struct LtvConfig {
     pub torque_scale: f64,
     pub torque_limits: bool,
     pub workspace: Option<WorkspaceBox>,
+    /// SQP iterations at most; they stop once a step lowers the merit by less
+    /// than `sqp_tol` (relative).
     pub sqp_iters: usize,
+    pub sqp_tol: f64,
     pub qp: QpConfig,
     /// Re-solve with this backend if `qp` stops without an optimum
     /// (e.g. the active set hits `max_iters`).
@@ -116,7 +119,8 @@ impl LtvConfig {
             torque_scale: 0.9,
             torque_limits: true,
             workspace: None,
-            sqp_iters: 3,
+            sqp_iters: 10,
+            sqp_tol: 1e-3,
             qp: QpConfig {
                 solver: QpSolver::ActiveSet,
                 max_iters: 2000,
@@ -437,7 +441,25 @@ impl Planner for LtvMpc {
             }
             m
         };
+        // Start from the better of the previous plan (shifted) and braking to
+        // rest at `a_max`: coasting at the measured velocity for the whole
+        // horizon can be 50° from anything sensible, and the first
+        // linearization around it sent joints to their limits.
+        let mut brake = DVector::zeros(nu);
+        let mut vb = v0.clone();
+        for k in 0..nh {
+            for c in 0..n {
+                let a = (-vb[c] / h).clamp(-a_max[c], a_max[c]);
+                brake[k * n + c] = a;
+                vb[c] += a * h;
+            }
+        }
         let mut merit_nom = merit(&u_nom);
+        let m_brake = merit(&brake);
+        if m_brake < merit_nom {
+            u_nom = brake;
+            merit_nom = m_brake;
+        }
         for _ in 0..cfg.sqp_iters.max(1) {
             let t_lin = std::time::Instant::now();
             let (qn, vn) = cond.rollout(&u_nom);
@@ -533,18 +555,24 @@ impl Planner for LtvMpc {
             cost_value = cost.value(&sol.x);
             let step = &sol.x - &u_nom;
             let mut taken = false;
+            let mut converged = false;
             for alpha in [1.0, 0.5, 0.25] {
                 let cand = &u_nom + &step * alpha;
                 let m = merit(&cand);
                 if m < merit_nom {
+                    let rel = (merit_nom - m) / merit_nom.max(1e-12);
                     u_nom = cand;
                     merit_nom = m;
                     taken = true;
+                    converged = rel < cfg.sqp_tol;
                     break;
                 }
             }
             if !taken {
                 status = format!("{status} (step rejected)");
+                break;
+            }
+            if converged {
                 break;
             }
         }

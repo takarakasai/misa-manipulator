@@ -412,9 +412,8 @@ fn ltv_plan_from_a_moving_start_returns_to_the_goal() {
     v0[3] = 0.7;
     v0[1] = -0.2;
     // One linearization around the coasting nominal is not enough for such a
-    // start (20° off); the default three (line-searched) are.
+    // start (20° off); the default (braking start, line-searched SQP) is.
     let cfg = LtvConfig::defaults(arm.n());
-    assert_eq!(cfg.sqp_iters, 3);
     let (plan, _) = LtvMpc::new(cfg).plan(&arm, q0.as_slice(), &v0, 0.0, &MpcGoal { tcp: &tcp, posture: Some(&q0) }).unwrap();
     let end = plan.q.last().unwrap();
     let dev = plan.idx.iter().enumerate().map(|(k, &i)| (end[k] - q0[i]).abs()).fold(0.0, f64::max);

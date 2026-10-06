@@ -112,6 +112,9 @@ enum Cmd {
         /// Maximum number of divergences to print.
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Also write every replayed cycle to this CSV (the `run --record` columns).
+        #[arg(long)]
+        record: Option<PathBuf>,
     },
     /// Bring-up: check the arm before trusting the control loop with it
     /// (scan / monitor / sign never energize the motors).
@@ -406,10 +409,14 @@ fn real_main(cli: Cli) -> Result<(), String> {
                 }
             }
         }
-        Cmd::Replay { log, robot, limit } => {
+        Cmd::Replay { log, robot, limit, record } => {
             let (header, frames) = replay::read_log(&log)?;
             let (profile, text, arm) = replay::load_for_replay(&header, robot.as_deref())?;
-            let r = replay::replay(&header, &frames, &profile, &text, &arm, limit)?;
+            let mut rec = match &record {
+                Some(p) => Some(record::Recorder::create(p, &arm).map_err(|e| e.to_string())?),
+                None => None,
+            };
+            let r = replay::replay(&header, &frames, &profile, &text, &arm, limit, rec.as_mut())?;
             if r.profile_changed {
                 eprintln!("note: the profile differs from the one recorded in the log");
             }

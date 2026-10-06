@@ -206,12 +206,12 @@ fn replay_is_bit_exact_and_catches_changes() {
     assert!(frames.iter().any(|f| f.requests.contains(&Mode::Osc)), "never entered OSC");
 
     let (rp, rtext, rarm) = crate::replay::load_for_replay(&header, None).unwrap();
-    let same = crate::replay::replay(&header, &frames, &rp, &rtext, &rarm, 10).unwrap();
+    let same = crate::replay::replay(&header, &frames, &rp, &rtext, &rarm, 10, None).unwrap();
     assert!(!same.profile_changed);
     assert!(same.divergences.is_empty(), "{:?}", same.divergences);
 
     let (cp, ctext, carm) = crate::replay::load_for_replay(&header, Some(&changed_path)).unwrap();
-    let changed = crate::replay::replay(&header, &frames, &cp, &ctext, &carm, 10).unwrap();
+    let changed = crate::replay::replay(&header, &frames, &cp, &ctext, &carm, 10, None).unwrap();
     assert!(changed.profile_changed);
     assert!(!changed.divergences.is_empty(), "a changed OSC gain went unnoticed");
     let _ = std::fs::remove_dir_all(&dir);
@@ -924,7 +924,7 @@ fn mpc_log_replays_bit_exact() {
     let (header, frames) = crate::replay::read_log(&log).unwrap();
     let with_plans = frames.iter().filter(|f| f.plan.is_some()).count();
     let (rp, rtext, rarm) = crate::replay::load_for_replay(&header, None).unwrap();
-    let r = crate::replay::replay(&header, &frames, &rp, &rtext, &rarm, 5).unwrap();
+    let r = crate::replay::replay(&header, &frames, &rp, &rtext, &rarm, 5, None).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     eprintln!("{} frames, {with_plans} with a plan, {} divergences", r.frames, r.divergences.len());
     assert!(with_plans > 50, "plans recorded: {with_plans}");

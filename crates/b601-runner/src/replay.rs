@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::assemble;
 use crate::config::RobotProfile;
 use crate::policy::Policy;
+use crate::record::Recorder;
 use crate::supervisor::{Mode, Target};
 use manip_mpc::JointPlan;
 
@@ -253,6 +254,8 @@ pub struct ReplayReport {
 
 /// Re-run the recorded inputs through the current code with `profile` and
 /// compare commands exactly. `profile_path` is only for the changed-profile note.
+/// With `record`, every cycle is also written as a CSV row (as `manip run
+/// --record`, without the tick time), so a real run can be analysed afterwards.
 pub fn replay(
     header: &LogHeader,
     frames: &[LogFrame],
@@ -260,6 +263,7 @@ pub fn replay(
     profile_text: &str,
     arm: &ArmModel,
     limit: usize,
+    mut record: Option<&mut Recorder>,
 ) -> Result<ReplayReport, String> {
     let names: Vec<String> = arm.dofs().iter().map(|d| d.name.clone()).collect();
     if names != header.axes {
@@ -271,6 +275,11 @@ pub fn replay(
         let target: Target = (&lf.target).into();
         let plan: Option<JointPlan> = lf.plan.as_ref().map(JointPlan::from);
         let out = policy.step(arm, &lf.frame.observation, &lf.requests, &target, plan.as_ref());
+        if let Some(r) = record.as_deref_mut() {
+            let t = lf.frame.time.as_secs_f64() - frames[0].frame.time.as_secs_f64();
+            r.row(t, policy.mode(), f64::NAN, &out.state, &out.joint_command, &out.info, &lf.frame.observation)
+                .map_err(|e| e.to_string())?;
+        }
         replayed.push(Frame {
             seq: lf.frame.seq,
             time: lf.frame.time,
