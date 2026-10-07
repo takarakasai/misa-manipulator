@@ -19,20 +19,22 @@ use std::path::{Path, PathBuf};
 
 use manip_model::ArmModel;
 use misa_core::{Frame, Intent, Observation, SafetyVerdict, Time, diff_commands};
-use nalgebra::{DVector, Isometry3, Quaternion, Translation3, UnitQuaternion};
+use nalgebra::{DVector, Isometry3, Matrix6, Quaternion, Translation3, UnitQuaternion, Vector6};
 use serde::{Deserialize, Serialize};
 
 use crate::assemble;
 use crate::config::RobotProfile;
 use crate::policy::Policy;
 use crate::record::Recorder;
-use crate::supervisor::{Mode, Target};
+use crate::supervisor::{JointExtras, Mode, Target};
 use manip_mpc::JointPlan;
 
 /// Bump when [`LogHeader`] / [`LogFrame`] change shape (postcard is not
 /// self-describing, so a reader must refuse other versions). Format 1 had no
-/// `plan` and is still read (as frames without plans).
-pub const LOG_FORMAT: u32 = 2;
+/// `plan` and is still read (as frames without plans). Format 3 added the
+/// generated-reference targets at the end of [`TargetRec`], so format 2 reads
+/// as is.
+pub const LOG_FORMAT: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogHeader {
@@ -55,6 +57,56 @@ pub enum TargetRec {
     Joint(Vec<f64>),
     /// Position, quaternion `[i, j, k, w]`, posture.
     Tcp { pos: [f64; 3], quat: [f64; 4], posture: Vec<f64> },
+    JointRef {
+        q: Vec<f64>,
+        v: Vec<f64>,
+        a: Vec<f64>,
+        torque: Option<Vec<f64>>,
+        kp: Option<Vec<f64>>,
+        kd: Option<Vec<f64>>,
+    },
+    /// Matrices as 36 values, column-major.
+    TcpRef {
+        pos: [f64; 3],
+        quat: [f64; 4],
+        twist: [f64; 6],
+        accel: [f64; 6],
+        posture: Vec<f64>,
+        wrench: Option<[f64; 6]>,
+        free: Option<Vec<f64>>,
+        stiffness: Option<Vec<f64>>,
+        damping: Option<Vec<f64>>,
+    },
+}
+
+fn opt_vec(x: &Option<DVector<f64>>) -> Option<Vec<f64>> {
+    x.as_ref().map(|v| v.as_slice().to_vec())
+}
+
+fn opt_dvec(x: &Option<Vec<f64>>) -> Option<DVector<f64>> {
+    x.as_ref().map(|v| DVector::from_column_slice(v))
+}
+
+fn mat_vec(m: &Matrix6<f64>) -> Vec<f64> {
+    m.as_slice().to_vec()
+}
+
+fn vec_mat(v: &[f64]) -> Matrix6<f64> {
+    Matrix6::from_column_slice(v)
+}
+
+fn pose_parts(p: &Isometry3<f64>) -> ([f64; 3], [f64; 4]) {
+    let t = p.translation.vector;
+    let c = p.rotation.coords;
+    ([t.x, t.y, t.z], [c.x, c.y, c.z, c.w])
+}
+
+fn pose_from(pos: &[f64; 3], quat: &[f64; 4]) -> Isometry3<f64> {
+    Isometry3::from_parts(
+        Translation3::new(pos[0], pos[1], pos[2]),
+        // Unchecked on purpose: renormalizing would change the last bits.
+        UnitQuaternion::new_unchecked(Quaternion::new(quat[3], quat[0], quat[1], quat[2])),
+    )
 }
 
 impl From<&Target> for TargetRec {
@@ -63,12 +115,29 @@ impl From<&Target> for TargetRec {
             Target::None => TargetRec::None,
             Target::Joint(q) => TargetRec::Joint(q.as_slice().to_vec()),
             Target::Tcp { pose, posture } => {
-                let p = pose.translation.vector;
-                let c = pose.rotation.coords;
-                TargetRec::Tcp {
-                    pos: [p.x, p.y, p.z],
-                    quat: [c.x, c.y, c.z, c.w],
+                let (pos, quat) = pose_parts(pose);
+                TargetRec::Tcp { pos, quat, posture: posture.as_slice().to_vec() }
+            }
+            Target::JointRef { r, extras } => TargetRec::JointRef {
+                q: r.q.as_slice().to_vec(),
+                v: r.v.as_slice().to_vec(),
+                a: r.a.as_slice().to_vec(),
+                torque: opt_vec(&extras.torque),
+                kp: opt_vec(&extras.kp),
+                kd: opt_vec(&extras.kd),
+            },
+            Target::TcpRef { tcp, posture, extras } => {
+                let (pos, quat) = pose_parts(&tcp.pose);
+                TargetRec::TcpRef {
+                    pos,
+                    quat,
+                    twist: tcp.twist.into(),
+                    accel: tcp.accel.into(),
                     posture: posture.as_slice().to_vec(),
+                    wrench: extras.wrench.map(Into::into),
+                    free: extras.free.as_ref().map(mat_vec),
+                    stiffness: extras.compliance.as_ref().map(|c| mat_vec(&c.stiffness)),
+                    damping: extras.compliance.as_ref().and_then(|c| c.damping.as_ref().map(mat_vec)),
                 }
             }
         }
@@ -81,12 +150,32 @@ impl From<&TargetRec> for Target {
             TargetRec::None => Target::None,
             TargetRec::Joint(q) => Target::Joint(DVector::from_column_slice(q)),
             TargetRec::Tcp { pos, quat, posture } => Target::Tcp {
-                pose: Isometry3::from_parts(
-                    Translation3::new(pos[0], pos[1], pos[2]),
-                    // Unchecked on purpose: renormalizing would change the last bits.
-                    UnitQuaternion::new_unchecked(Quaternion::new(quat[3], quat[0], quat[1], quat[2])),
-                ),
+                pose: pose_from(pos, quat),
                 posture: DVector::from_column_slice(posture),
+            },
+            TargetRec::JointRef { q, v, a, torque, kp, kd } => Target::JointRef {
+                r: manip_control::JointRef {
+                    q: DVector::from_column_slice(q),
+                    v: DVector::from_column_slice(v),
+                    a: DVector::from_column_slice(a),
+                },
+                extras: JointExtras { torque: opt_dvec(torque), kp: opt_dvec(kp), kd: opt_dvec(kd) },
+            },
+            TargetRec::TcpRef { pos, quat, twist, accel, posture, wrench, free, stiffness, damping } => Target::TcpRef {
+                tcp: manip_wbc::TcpRef {
+                    pose: pose_from(pos, quat),
+                    twist: Vector6::from(*twist),
+                    accel: Vector6::from(*accel),
+                },
+                posture: DVector::from_column_slice(posture),
+                extras: Box::new(manip_wbc::TcpExtras {
+                    wrench: wrench.map(Vector6::from),
+                    free: free.as_deref().map(vec_mat),
+                    compliance: stiffness.as_deref().map(|k| manip_wbc::Compliance {
+                        stiffness: vec_mat(k),
+                        damping: damping.as_deref().map(vec_mat),
+                    }),
+                }),
             },
         }
     }
@@ -209,7 +298,7 @@ pub fn read_log(path: &Path) -> Result<(LogHeader, Vec<LogFrame>), String> {
     let header: LogHeader = next(&mut r)?.ok_or("empty log")?;
     let mut frames = Vec::new();
     match header.format {
-        LOG_FORMAT => {
+        2 | LOG_FORMAT => {
             while let Some(f) = next(&mut r)? {
                 frames.push(f);
             }

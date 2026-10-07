@@ -164,16 +164,49 @@ pub fn physics_and_limits(c: &ChainState, d: &Dynamics, tau_max: &DVector<f64>, 
 
 /// Append safety barriers to `level`:
 /// `ḧ + (α1+α2)·ḣ + α1·α2·h ≥ 0` with `ḧ = grad·q̈ + drift` (`α1 = α2 = alpha`).
-pub fn with_barriers(mut level: Task, c: &ChainState, d: &Dynamics, cbfs: &[Cbf], alpha: f64) -> Task {
+pub fn with_barriers(level: Task, c: &ChainState, d: &Dynamics, cbfs: &[Cbf], alpha: f64) -> Task {
+    with_barriers_ext(level, c, d, cbfs, alpha, None)
+}
+
+/// [`with_barriers`] where the arm also accelerates by `qdd_extra` (chain
+/// DOFs) beyond the solved `q̈`: the joint acceleration a commanded wrench
+/// or impedance torque adds in free space (`M⁻¹·Jᵀ·w`). Without it a force
+/// pushing into nothing carried the TCP `Λ⁻¹F/α²` past the wall (3.7 cm for
+/// 3 N). Against a real surface the reaction cancels that acceleration, so
+/// near a wall the force is reduced instead: push on surfaces a few cm
+/// inside the box.
+pub fn with_barriers_ext(mut level: Task, c: &ChainState, d: &Dynamics, cbfs: &[Cbf], alpha: f64, qdd_extra: Option<&DVector<f64>>) -> Task {
     let n = c.n();
     let (a1, a2) = (alpha, alpha);
     for b in cbfs {
         let g = DMatrix::from_row_slice(1, n, &c.idx.iter().map(|&i| b.grad[i]).collect::<Vec<_>>());
-        let expr = &(&g * &d.qddot().as_affine()) + &DVector::from_element(1, b.drift);
+        let extra = qdd_extra.map(|x| (&g * x)[0]).unwrap_or(0.0);
+        let expr = &(&g * &d.qddot().as_affine()) + &DVector::from_element(1, b.drift + extra);
         let lb = DVector::from_element(1, -(a1 + a2) * b.h_dot - a1 * a2 * b.h);
         level = level + Task::ge(&expr, &lb);
     }
     level
+}
+
+/// Joint position limits as [`Cbf`]s (independent-DOF gradients), widened to
+/// include the current position like [`physics_and_limits`]: with
+/// [`with_barriers_ext`] they keep a wrench from driving a joint through its
+/// limit (misa-wbc's joint-limit barrier only sees the solved `q̈`).
+pub fn joint_position_barriers(arm_n: usize, c: &ChainState) -> Vec<Cbf> {
+    let big = 1e3;
+    let mut out = Vec::new();
+    for (k, (&i, dof)) in c.idx.iter().zip(&c.dofs).enumerate() {
+        let (q, v) = (c.q[k], c.v[k]);
+        let hi = finite_or(dof.q_max, big).max(q);
+        let lo = finite_or(dof.q_min, -big).min(q);
+        let mut up = DVector::zeros(arm_n);
+        up[i] = -1.0;
+        out.push(Cbf { grad: up, drift: 0.0, h: hi - q, h_dot: -v });
+        let mut down = DVector::zeros(arm_n);
+        down[i] = 1.0;
+        out.push(Cbf { grad: down, drift: 0.0, h: q - lo, h_dot: v });
+    }
+    out
 }
 
 /// TCP pose PD gains (acceleration units: [1/s²], [1/s]).

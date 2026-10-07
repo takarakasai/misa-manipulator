@@ -11,21 +11,26 @@
 //! manip run --robot robots/rebot_b601_dm.toml --plant can --source leader --leader leaders/stararm102.toml
 //! ```
 
+mod api;
 mod app;
 mod assemble;
 mod config;
 mod effects;
 mod guard;
 mod hw;
+mod motion;
 mod mpc_driver;
 mod policy;
 mod record;
 mod replay;
 mod rigid;
 mod supervisor;
+mod traj;
 mod virtual_arm;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_api;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -101,6 +106,17 @@ enum Cmd {
         /// joint angles.
         #[arg(long)]
         viewer: bool,
+        /// `--source api`: listen for HTTP/JSON motion commands here.
+        /// Anything but loopback needs a token.
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        api_bind: std::net::SocketAddr,
+        /// File holding the API token (default: the MANIP_API_TOKEN variable).
+        #[arg(long)]
+        api_token_file: Option<PathBuf>,
+        /// `--source script`: a JSON motion script, `[{"t": s, "path":
+        /// "move/tcp", "body": {...}}, ...]` (the API's requests at given times).
+        #[arg(long)]
+        script: Option<PathBuf>,
     },
     /// Re-run a binary run log through the current code and compare every
     /// command bit for bit. Exits non-zero if anything diverged.
@@ -126,6 +142,28 @@ enum Cmd {
         plant: PlantKind,
         #[command(subcommand)]
         cmd: HwCmd,
+    },
+    /// Send one request to a running `manip run --source api`, print the
+    /// reply. GET for `state`, `info`, `motions/<id>`; POST otherwise.
+    /// Example: `manip cmd move/tcp position=0,0,0.05 relative=true --wait`.
+    #[command(name = "cmd")]
+    Client {
+        /// Endpoint under /v1/ (`move/joint`, `move/tcp`, `gripper`, `state`, ...).
+        path: String,
+        /// Body as key=value: JSON values (`3`, `true`, `[1,2]`), `1,2,3` for
+        /// arrays, `a.b=1` to nest.
+        args: Vec<String>,
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        url: String,
+        /// API token (default: the MANIP_API_TOKEN variable).
+        #[arg(long)]
+        token: Option<String>,
+        /// Wait until the motion has finished (exit status 1 if it was
+        /// aborted or rejected).
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t = 60.0)]
+        timeout: f64,
     },
     /// Only display leader values (does not move the follower).
     Leader {
@@ -220,6 +258,12 @@ enum SourceKind {
     /// The targets of a run log (`--leader <run.mlog>`), cycle by cycle: a
     /// real teleop session replayed against a simulated plant.
     Log,
+    /// Motion commands over HTTP/JSON (`--api-bind`; `manip cmd`). With
+    /// `--leader <profile>`, the `teleop` mode command hands over to it.
+    Api,
+    /// The API's commands from a file at given times (`--script`), then fold
+    /// up and exit.
+    Script,
 }
 
 fn main() {
@@ -275,13 +319,18 @@ fn real_main(cli: Cli) -> Result<(), String> {
             delay_ticks,
             jitter,
             viewer,
+            api_bind,
+            api_token_file,
+            script,
         } => {
             let (profile, dir) = RobotProfile::load(&robot)?;
             let arm = assemble::load_arm(&profile, &dir)?;
             log::info!("{} ({}): {} DOF, TCP = {}", profile.robot.name, arm.name(), arm.n(), profile.robot.tcp.link);
-            if fast && (matches!(plant, PlantKind::Can | PlantKind::VirtualCan) || source == SourceKind::Leader) {
+            if fast && (matches!(plant, PlantKind::Can | PlantKind::VirtualCan) || matches!(source, SourceKind::Leader | SourceKind::Api)) {
                 return Err("--fast is only allowed with sim + synthetic target".into());
             }
+            // Motion commands start from holding where the arm is.
+            let mode = if matches!(source, SourceKind::Api | SourceKind::Script) { Mode::Hold } else { mode };
             let start_pose = match &start_pose {
                 Some(name) => Some(
                     assemble::named_pose(&profile, &arm, name)
@@ -289,7 +338,16 @@ fn real_main(cli: Cli) -> Result<(), String> {
                 ),
                 None => None,
             };
-            let src = make_source(&profile, &arm, source, leader.as_deref(), radius, freq)?;
+            let src = match source {
+                SourceKind::Api | SourceKind::Script => {
+                    let token = match &api_token_file {
+                        Some(p) => Some(std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?.trim().to_string()),
+                        None => std::env::var("MANIP_API_TOKEN").ok().filter(|t| !t.is_empty()),
+                    };
+                    make_api_source(&profile, &arm, source, leader.as_deref(), api_bind, token, script.as_deref())?
+                }
+                _ => make_source(&profile, &arm, source, leader.as_deref(), radius, freq)?,
+            };
             // Effects wrap only the physics sims; virtual-can already has the
             // real bus-thread timing.
             let simulated = matches!(plant, PlantKind::Sim | PlantKind::Rigid);
@@ -409,6 +467,10 @@ fn real_main(cli: Cli) -> Result<(), String> {
                 }
             }
         }
+        Cmd::Client { path, args, url, token, wait, timeout } => {
+            let token = token.or_else(|| std::env::var("MANIP_API_TOKEN").ok().filter(|t| !t.is_empty()));
+            api::client(&url, token.as_deref(), &path, &args, wait, timeout)
+        }
         Cmd::Replay { log, robot, limit, record } => {
             let (header, frames) = replay::read_log(&log)?;
             let (profile, text, arm) = replay::load_for_replay(&header, robot.as_deref())?;
@@ -468,6 +530,7 @@ fn make_source(
 ) -> Result<Source, String> {
     Ok(match kind {
         SourceKind::None => Source::None,
+        SourceKind::Api | SourceKind::Script => return Err("built by make_api_source".into()),
         SourceKind::Sine => {
             if profile.sine.is_empty() {
                 return Err("profile has no [[sine]]".into());
@@ -507,6 +570,54 @@ fn make_source(
             }
         }
     })
+}
+
+/// The executive with the HTTP server (`api`) or a script.
+fn make_api_source(
+    profile: &RobotProfile,
+    arm: &manip_model::ArmModel,
+    kind: SourceKind,
+    leader: Option<&std::path::Path>,
+    bind: std::net::SocketAddr,
+    token: Option<String>,
+    script: Option<&std::path::Path>,
+) -> Result<Source, String> {
+    use std::sync::{Arc, Mutex};
+    let cfg = assemble::motion_config(profile, arm, true)?;
+    let poses = profile
+        .pose
+        .keys()
+        .filter_map(|n| assemble::named_pose(profile, arm, n).map(|q| (n.clone(), q.as_slice().to_vec())))
+        .collect();
+    let teleop = match (kind, leader) {
+        (SourceKind::Api, Some(path)) => {
+            let (thread, _) = open_leader(path)?;
+            let mapping = assemble::TeleopMapping::new(&profile.teleop, arm, thread.names())?;
+            Some(motion::Teleop { thread, mapping, timeout: Duration::from_secs_f64(profile.control.leader_timeout_s) })
+        }
+        _ => None,
+    };
+    let info = api::ArmInfo::new(&profile.robot.name, arm, cfg.gripper, poses, teleop.is_some(), true, profile.control.rate_hz);
+    let board = Arc::new(Mutex::new(motion::Board::default()));
+    let snapshot = Arc::new(Mutex::new(api::Snapshot::default()));
+    let (exec, script_end) = match kind {
+        SourceKind::Api => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            api::serve(api::ApiOptions { bind, token }, info.clone(), board.clone(), snapshot.clone(), tx)?;
+            (motion::Executive::new(cfg, Some(rx), board, teleop), None)
+        }
+        _ => {
+            let path = script.ok_or("--source script requires --script <file.json>")?;
+            let items = api::load_script(path, &info)?;
+            let end = items.iter().map(|(t, _, _)| *t).fold(0.0, f64::max);
+            let mut exec = motion::Executive::new(cfg, None, board, None);
+            for (t, cmd, append) in items {
+                exec.schedule(t, cmd, append);
+            }
+            (exec, Some(end))
+        }
+    };
+    Ok(Source::Api(Box::new(app::ApiSource { exec, info, snapshot, script_end })))
 }
 
 #[cfg(feature = "fashionstar")]

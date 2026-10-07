@@ -292,6 +292,16 @@ pub struct OscSection {
     pub ang_v_max: f64,
     #[serde(default = "d8")]
     pub ang_a_max: f64,
+    /// Caps on a commanded TCP impedance (API), in acceleration units: the
+    /// fastest mode's ω² [1/s²] and damping [1/s], and the damping floor.
+    /// Above them the rotational stiffness (then the translational) is
+    /// scaled down. Not yet tried on the real arm.
+    #[serde(default = "d1600")]
+    pub compliance_kp_max: f64,
+    #[serde(default = "d80")]
+    pub compliance_kd_max: f64,
+    #[serde(default = "d4")]
+    pub compliance_kd_min: f64,
     /// QP backend (`active_set` | `clarabel`).
     #[serde(default = "default_backend")]
     pub backend: String,
@@ -337,6 +347,9 @@ fn d003() -> f64 { 0.03 }
 fn d2() -> f64 { 2.0 }
 fn d15() -> f64 { 1.5 }
 fn d8() -> f64 { 8.0 }
+fn d1600() -> f64 { 1600.0 }
+fn d80() -> f64 { 80.0 }
+fn d4() -> f64 { 4.0 }
 fn yes() -> bool { true }
 
 #[derive(Debug, Clone, Deserialize)]

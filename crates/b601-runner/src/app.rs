@@ -77,6 +77,17 @@ pub enum Source {
         timeout: Duration,
         last_seq: u64,
     },
+    /// Motion commands (HTTP API or a script) through the executive.
+    Api(Box<ApiSource>),
+}
+
+/// The executive and what it publishes.
+pub struct ApiSource {
+    pub exec: crate::motion::Executive,
+    pub info: crate::api::ArmInfo,
+    pub snapshot: crate::api::SharedSnapshot,
+    /// A script: park and end once it is done after this time.
+    pub script_end: Option<f64>,
 }
 
 impl Source {
@@ -107,7 +118,8 @@ impl Source {
                 posture: posture.clone(),
             },
             (_, Target::Tcp { pose, posture }) => GoalSpec::Fixed { pose: *pose, posture: posture.clone() },
-            (_, Target::Joint(q)) => {
+            (_, Target::TcpRef { tcp, posture, .. }) => GoalSpec::Fixed { pose: tcp.pose, posture: posture.clone() },
+            (_, Target::Joint(q) | Target::JointRef { r: manip_control::JointRef { q, .. }, .. }) => {
                 let zero = DVector::zeros(q.len());
                 GoalSpec::moving(arm, q, rate.qdot.as_ref().unwrap_or(&zero), t, lookahead, q_margin)
             }
@@ -151,6 +163,7 @@ impl Source {
                 let k = ((t / *dt).round().max(0.0) as usize).min(targets.len().saturating_sub(1));
                 targets.get(k).cloned().unwrap_or(Target::None)
             }
+            Source::Api(_) => Target::None,
             Source::Leader { thread, mapping, timeout, last_seq } => match thread.latest() {
                 Some(sample) if sample.at.elapsed() <= *timeout => {
                     *last_seq = sample.seq;
@@ -331,7 +344,9 @@ pub fn run(
     let mut policy = Policy::new(profile, arm, &q)?;
     // The planner (Mpc mode only): on a worker thread in real time, inside
     // the cycle when the simulation runs as fast as it can.
-    let mut mpc = if opts.mode == Mode::Mpc {
+    let api = matches!(source, Source::Api(_));
+    let mpc_available = opts.mode == Mode::Mpc || api;
+    let mut mpc = if mpc_available {
         let mut d = crate::mpc_driver::MpcDriver::new(crate::assemble::mpc_planner(profile, arm)?, arm, profile.mpc.rate_hz, opts.fast);
         d.from_reference = match profile.mpc.replan_from_reference.as_slice() {
             [] => None,
@@ -391,7 +406,15 @@ pub fn run(
         if k >= 2 {
             break Ok(());
         }
-        if policy.mode() == Mode::Done {
+        // An API run stays up folded (and energized) after a park command;
+        // it ends on shutdown or Ctrl-C.
+        // The runner itself folds up on Ctrl-C or when --duration is over.
+        let runner_parks = k >= 1 || opts.duration_s.is_some_and(|d| t >= d);
+        let keep_up = match &source {
+            Source::Api(a) => !a.exec.shutting_down() && !runner_parks,
+            _ => false,
+        };
+        if policy.mode() == Mode::Done && !keep_up {
             log::info!("finished folding");
             break Ok(());
         }
@@ -431,8 +454,23 @@ pub fn run(
         }
 
         let keep = s.q.clone();
-        let target = match (&opts.start_pose, requested) {
-            (Some(goal), false) => Target::Joint(goal.clone()),
+        let target = match (&opts.start_pose, requested, &mut source) {
+            (Some(goal), false, _) => Target::Joint(goal.clone()),
+            (_, true, Source::Api(a)) => {
+                if let Some(end) = a.script_end
+                    && t > end
+                    && a.exec.idle()
+                    && !a.exec.shutting_down()
+                {
+                    log::info!("script done");
+                    a.exec.schedule(t, crate::motion::MotionCmd::Shutdown, false);
+                }
+                let out = a.exec.step(arm, t, &s, pending, !runner_parks);
+                for m in out.requests {
+                    push(m, &mut requests, &mut pending);
+                }
+                out.target
+            }
             _ => source.target(arm, t, &keep, &s),
         };
         let plan = match mpc.as_mut() {
@@ -455,6 +493,10 @@ pub fn run(
             }
         };
         let out = policy.step(arm, &obs, &requests, &target, plan.as_ref());
+        if let Source::Api(a) = &source {
+            let snap = crate::api::Snapshot::build(t, policy.mode(), &out.state, &obs, &a.info, Some(a.exec.report()));
+            *a.snapshot.lock().unwrap() = snap;
+        }
         if let Some(tr) = &out.info.transition {
             log::info!("{tr}");
         }
@@ -502,6 +544,7 @@ pub fn run(
                     let (hz, errs) = thread.stats();
                     format!(" leader {hz:.0}Hz err={errs} {}", thread.status_line())
                 }
+                Source::Api(a) => format!(" {}", a.exec.summary()),
                 _ => String::new(),
             };
             eprintln!(

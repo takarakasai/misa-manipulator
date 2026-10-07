@@ -269,3 +269,43 @@ fn osc_free_axis_presses_with_profile_gains_elsewhere() {
     eprintln!("free axis: contact {mean:.3} N, TCP moved {:.1?} mm, tilt {:.4} rad", (off * 1e3).as_slice(), s.tcp_pose.rotation.angle_to(&s0.tcp_pose.rotation));
     assert!((mean - push).abs() < 0.05 * push, "contact force {mean}");
 }
+
+/// A force pushing into nothing toward a barrier (a floor 2 cm below) stops
+/// at the barrier: the barriers count the acceleration the wrench adds. They
+/// did not, and 3 N carried the TCP 3.7 cm past the workspace floor.
+#[test]
+fn osc_force_in_free_space_stops_at_a_barrier() {
+    use manip_wbc::{Cbf, TcpExtras};
+    let arm = model("rebot_b601_dm", "end_link");
+    let n = arm.n();
+    let mut osc = Osc::new(OscConfig::defaults(n));
+    let grip = JointImpedance::new(JointGains::uniform(n, 200.0, 5.0), Feedforward::Gravity);
+    let q0 = DVector::from_row_slice(&[0.0, -1.2, -1.2, 0.3, 0.0, 0.0, 0.01]);
+    let s0 = arm.evaluate(q0.as_slice(), &vec![0.0; n]);
+    let floor = s0.tcp_pose.translation.z - 0.02;
+    let mut free = nalgebra::Matrix6::zeros();
+    free[(5, 5)] = 1.0;
+    let extras = TcpExtras { wrench: Some(nalgebra::Vector6::new(0.0, 0.0, 0.0, 0.0, 0.0, -3.0)), free: Some(free), compliance: None };
+    let tcp_ref = TcpRef::at_rest(s0.tcp_pose);
+    let posture = JointRef::at_rest(q0.clone());
+    let (mut q, mut v) = (q0.clone(), DVector::zeros(n));
+    let mut cmd = Default::default();
+    let mut lowest = f64::INFINITY;
+    for k in 0..4000 {
+        let s = arm.evaluate(q.as_slice(), v.as_slice());
+        if k % CTRL_EVERY == 0 {
+            let cbf = Cbf {
+                grad: DVector::from_iterator(n, (0..n).map(|j| s.tcp_jacobian[(5, j)])),
+                drift: s.tcp_jdot_v[5],
+                h: s.tcp_pose.translation.z - floor,
+                h_dot: s.tcp_twist[5],
+            };
+            let base = grip.command(&arm, &s, &posture);
+            cmd = osc.command_ext(&arm, &s, &tcp_ref, &posture, PHYS_DT * CTRL_EVERY as f64, base, &[cbf], &extras).unwrap().0;
+        }
+        lowest = lowest.min(s.tcp_pose.translation.z);
+        step(&arm, &mut q, &mut v, &cmd);
+    }
+    eprintln!("lowest TCP {:.2} mm relative to the floor", (lowest - floor) * 1e3);
+    assert!(lowest > floor - 1e-3, "went {:.1} mm through the floor", (floor - lowest) * 1e3);
+}

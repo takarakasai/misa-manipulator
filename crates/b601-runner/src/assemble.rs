@@ -126,6 +126,9 @@ pub fn osc_config(p: &RobotProfile, arm: &ArmModel) -> Result<OscConfig, String>
     c.motor_kd = col(&js, |j| j.osc_kd.unwrap_or(o.motor_kd));
     c.motor_kp = col(&js, |j| j.osc_kp.unwrap_or(0.0));
     c.motor_lead_max = o.motor_lead_max;
+    c.compliance_kp_max = o.compliance_kp_max;
+    c.compliance_kd_max = o.compliance_kd_max;
+    c.compliance_kd_min = o.compliance_kd_min;
     c.friction = friction_model(p, arm, o.friction_v_eps);
     c.solve.backend = match o.backend.as_str() {
         "active_set" => misa_wbc::QpSolver::ActiveSet,
@@ -139,6 +142,33 @@ pub fn osc_config(p: &RobotProfile, arm: &ArmModel) -> Result<OscConfig, String>
         other => return Err(format!("[osc] formulation = \"{other}\" is not supported")),
     };
     Ok(c)
+}
+
+/// The motion executive's limits: the shapers' (so generated references pass
+/// through the policy unchanged), the gripper DOF (the one DOF outside the
+/// TCP chain), and the joint tracking gains.
+pub fn motion_config(p: &RobotProfile, arm: &ArmModel, mpc_available: bool) -> Result<crate::motion::MotionConfig, String> {
+    let sc = supervisor_config(p, arm)?;
+    let chain = arm.tcp_chain();
+    let others: Vec<usize> = (0..arm.n()).filter(|i| !chain.contains(i)).collect();
+    Ok(crate::motion::MotionConfig {
+        dt: 1.0 / p.control.rate_hz,
+        v_max: sc.shaper.v_max.clone(),
+        a_max: sc.shaper.a_max.clone(),
+        lin_v_max: p.osc.lin_v_max,
+        lin_a_max: p.osc.lin_a_max,
+        ang_v_max: p.osc.ang_v_max,
+        ang_a_max: p.osc.ang_a_max,
+        time_constant_s: p.control.shaper_time_constant_s,
+        gripper: (others.len() == 1).then(|| others[0]),
+        track_kp: sc.track.kp.clone(),
+        joint_range: arm.dofs().iter().map(|d| (d.q_min, d.q_max)).collect(),
+        q_margin: 0.02,
+        stream_lead: (0.02, 0.1),
+        mpc_available,
+        mpc_tolerance: (0.002, 0.02),
+        mpc_timeout_s: 15.0,
+    })
 }
 
 /// SafetyGate config. Looser than the shaper (references produced by the shaper pass

@@ -293,7 +293,16 @@ impl Osc {
         let push = (extras.wrench.is_some() || extras.compliance.is_some()).then(|| tasks::wrench_torque(&c, &wrench));
         let d = tasks::chain_dynamics_with(&c, cfg.formulation, cfg.friction.as_ref(), None, push.as_ref());
         let level0 = tasks::physics_and_limits(&c, &d, &tau_max, &cfg.joint_limits(&c));
-        let level0 = tasks::with_barriers(level0, &c, &d, cbfs, cfg.cbf_alpha);
+        // The barriers see the acceleration the pushed torque adds in free space.
+        let push_qdd = push.as_ref().and_then(|t| c.mass.clone().cholesky().map(|ch| ch.solve(t)));
+        let level0 = match &push_qdd {
+            Some(x) => {
+                let mut all = cbfs.to_vec();
+                all.extend(tasks::joint_position_barriers(arm.n(), &c));
+                tasks::with_barriers_ext(level0, &c, &d, &all, cfg.cbf_alpha, Some(x))
+            }
+            None => tasks::with_barriers(level0, &c, &d, cbfs, cfg.cbf_alpha),
+        };
         let fb = match (&extras.compliance, &extras.free) {
             (Some(_), _) => TcpFeedback::Feedforward,
             (None, Some(p)) => TcpFeedback::Free(p),
@@ -306,7 +315,16 @@ impl Osc {
         let levels: [Task; 3] = [level0, tcp_task.task.clone(), level2];
         // Accept degradation of level 2 (posture) alone: only the use of
         // redundancy is unmet; safety and the objective are solved.
-        let sol = solve_levels(&mut self.solver, &d, &levels, &cfg.solve, 2, &tau_max, cfg.solution_check)?;
+        // With a pushed torque the barriers are often strictly active from a
+        // standing start (they must cancel the force's acceleration), where
+        // misa-wbc's ActiveSet reports level 0 Infeasible at its first
+        // iteration and every cycle went through the Clarabel retry: go there
+        // directly (median ~0.5 ms).
+        let solve = match &push {
+            Some(_) => misa_wbc::solve::SolveConfig { backend: misa_wbc::QpSolver::Clarabel, ..cfg.solve.clone() },
+            None => cfg.solve.clone(),
+        };
+        let sol = solve_levels(&mut self.solver, &d, &levels, &solve, 2, &tau_max, cfg.solution_check)?;
         let residual = tcp_task.residual(&sol.qddot);
         let cmd = self.output.command(&c, &sol.qddot, &sol.tau, dt, &cfg.motor_gains(&c), base);
         Ok((

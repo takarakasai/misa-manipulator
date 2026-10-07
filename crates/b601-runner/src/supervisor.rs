@@ -29,7 +29,7 @@
 
 use manip_control::{JointCommand, JointGains, JointImpedance, JointRef, JointShaper, ShaperLimits, TcpShaper};
 use manip_mpc::JointPlan;
-use manip_wbc::{JointTracking, Osc, OscReport, TcpRef, TrackingReport};
+use manip_wbc::{JointTracking, Osc, OscReport, TcpExtras, TcpRef, TrackingReport};
 use manip_model::{ArmModel, ArmState};
 use nalgebra::{DVector, Isometry3};
 
@@ -64,6 +64,39 @@ pub enum Target {
         pose: Isometry3<f64>,
         posture: DVector<f64>,
     },
+    /// A joint trajectory generated outside (motion commands): followed as
+    /// is ([`JointShaper::follow`]) instead of shaped toward a point.
+    JointRef { r: JointRef, extras: JointExtras },
+    /// A TCP trajectory generated outside, with an optional wrench /
+    /// impedance (Osc mode).
+    TcpRef {
+        tcp: TcpRef,
+        posture: DVector<f64>,
+        extras: Box<TcpExtras>,
+    },
+}
+
+impl Target {
+    /// The joint angles this target asks for, if any (posture of a TCP target).
+    fn joints(&self) -> Option<&DVector<f64>> {
+        match self {
+            Target::None => None,
+            Target::Joint(q) => Some(q),
+            Target::JointRef { r, .. } => Some(&r.q),
+            Target::Tcp { posture, .. } | Target::TcpRef { posture, .. } => Some(posture),
+        }
+    }
+}
+
+/// Joint-space additions to a [`Target::JointRef`] (Joint mode).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JointExtras {
+    /// Added to the feedforward torque [N·m or N, model units]: joint-space
+    /// force control (open loop, like the TCP wrench).
+    pub torque: Option<DVector<f64>>,
+    /// Replace the tracking gains (motor-side PD) per joint.
+    pub kp: Option<DVector<f64>>,
+    pub kd: Option<DVector<f64>>,
 }
 
 /// Breakdown of one cycle (for recording).
@@ -221,13 +254,21 @@ impl Supervisor {
                 self.gravity.command(arm, s, &JointRef::at_rest(s.q.clone()))
             }
             Mode::Joint => {
-                let goal = match target {
-                    Target::Joint(q) => clamp_to_limits(arm, q),
-                    Target::Tcp { posture, .. } => clamp_to_limits(arm, posture),
-                    Target::None => self.shaper.current().q.clone(),
-                };
                 let prev = self.shaper.current().clone();
-                let mut r = self.shaper.step(&goal, dt).clone();
+                let mut r = match target {
+                    Target::JointRef { r, .. } => {
+                        let mut want = r.clone();
+                        want.q = clamp_to_limits(arm, &want.q);
+                        self.shaper.follow(&want, dt).clone()
+                    }
+                    _ => {
+                        let goal = match target.joints() {
+                            Some(q) => clamp_to_limits(arm, q),
+                            None => self.shaper.current().q.clone(),
+                        };
+                        self.shaper.step(&goal, dt).clone()
+                    }
+                };
                 if let Some(g) = &self.cfg.safety {
                     // Judge where the reference would come to rest if it braked
                     // now, not where it is, and brake gently (a quarter of the
@@ -256,20 +297,34 @@ impl Supervisor {
                 }
                 self.guarding = info.guarded;
                 let mut c = self.track.command(arm, s, &r);
+                if let Target::JointRef { extras, .. } = target {
+                    apply_joint_extras(&mut c, extras);
+                }
                 scale_gains(&mut c, ramp);
                 info.reference = Some(r);
                 c
             }
             Mode::Osc => {
-                let (pose, posture) = match target {
-                    Target::Tcp { pose, posture } => (*pose, clamp_to_limits(arm, posture)),
-                    Target::Joint(q) => {
-                        let q = clamp_to_limits(arm, q);
-                        (arm.tcp_pose(q.as_slice()), q)
+                let no_extras = TcpExtras::default();
+                let (tr, posture, extras) = match target {
+                    Target::TcpRef { tcp, posture, extras } => {
+                        let want = manip_control::shaper::TcpRefState { pose: tcp.pose, twist: tcp.twist, accel: tcp.accel };
+                        (self.tcp_shaper.follow(&want, dt).clone(), clamp_to_limits(arm, posture), &**extras)
                     }
-                    Target::None => (self.tcp_shaper.current().pose, self.shaper.current().q.clone()),
+                    _ => {
+                        let (pose, posture) = match target {
+                            Target::Tcp { pose, posture } => (*pose, clamp_to_limits(arm, posture)),
+                            Target::Joint(q) | Target::JointRef { r: JointRef { q, .. }, .. } => {
+                                let q = clamp_to_limits(arm, q);
+                                (arm.tcp_pose(q.as_slice()), q)
+                            }
+                            Target::None | Target::TcpRef { .. } => {
+                                (self.tcp_shaper.current().pose, self.shaper.current().q.clone())
+                            }
+                        };
+                        (self.tcp_shaper.step(&pose, dt).clone(), posture, &no_extras)
+                    }
                 };
-                let tr = self.tcp_shaper.step(&pose, dt).clone();
                 let pr = self.shaper.step(&posture, dt).clone();
                 let tcp_ref = TcpRef {
                     pose: tr.pose,
@@ -280,7 +335,7 @@ impl Supervisor {
                 // DOFs that don't move the TCP (gripper) are tracked with joint impedance.
                 let base = self.track.command(arm, s, &pr);
                 let cbfs = self.cfg.safety.as_ref().map(|g| g.cbfs(arm, s)).unwrap_or_default();
-                match self.osc.command_with(arm, s, &tcp_ref, &pr, dt, base, &cbfs) {
+                match self.osc.command_ext(arm, s, &tcp_ref, &pr, dt, base, &cbfs, extras) {
                     Ok((c, report)) => {
                         info.osc = Some(report);
                         info.reference = Some(pr);
@@ -299,14 +354,15 @@ impl Supervisor {
                 }
             }
             Mode::Mpc => {
-                if let Target::Tcp { pose, .. } = target {
-                    info.tcp_reference = Some(*pose);
+                match target {
+                    Target::Tcp { pose, .. } => info.tcp_reference = Some(*pose),
+                    Target::TcpRef { tcp, .. } => info.tcp_reference = Some(tcp.pose),
+                    _ => {}
                 }
                 // Posture / gripper reference from the target, as in OSC.
-                let posture = match target {
-                    Target::Tcp { posture, .. } => clamp_to_limits(arm, posture),
-                    Target::Joint(q) => clamp_to_limits(arm, q),
-                    Target::None => self.shaper.current().q.clone(),
+                let posture = match target.joints() {
+                    Some(q) => clamp_to_limits(arm, q),
+                    None => self.shaper.current().q.clone(),
                 };
                 let pr = self.shaper.step(&posture, dt).clone();
                 let base = self.track.command(arm, s, &pr);
@@ -402,6 +458,21 @@ fn brake(r: &JointRef, a_brake: &DVector<f64>, dt: f64) -> JointRef {
         out.v[i] = v_new;
     }
     out
+}
+
+/// Torque offsets and gain overrides of a joint command.
+fn apply_joint_extras(c: &mut JointCommand, x: &JointExtras) {
+    for (i, a) in c.axes.iter_mut().enumerate() {
+        if let Some(t) = &x.torque {
+            a.tau += t[i];
+        }
+        if let Some(kp) = &x.kp {
+            a.kp = kp[i];
+        }
+        if let Some(kd) = &x.kd {
+            a.kd = kd[i];
+        }
+    }
 }
 
 fn clamp_to_limits(arm: &ArmModel, q: &DVector<f64>) -> DVector<f64> {
