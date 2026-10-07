@@ -21,12 +21,12 @@ use manip_model::{ArmModel, ArmState};
 use misa_wbc::dynamics::Formulation;
 use misa_wbc::solve::{SolveConfig, Solver};
 use misa_wbc::Task;
-use nalgebra::{DVector, Vector6};
+use nalgebra::{DVector, Matrix6, Vector6};
 
 use crate::chain::ChainState;
 use crate::output::{MotorGains, MotorOutput};
 use crate::solve::{solve_levels, WbcError};
-use crate::tasks::{self, Cbf, JointLimitParams, SingularityParams, TcpGains, TcpRef};
+use crate::tasks::{self, Cbf, Compliance, ComplianceLimits, JointLimitParams, SingularityParams, TcpFeedback, TcpGains, TcpRef};
 
 /// Kept for callers written against the OSC-only API.
 pub type OscError = WbcError;
@@ -73,6 +73,10 @@ pub struct OscConfig {
     pub sing_sigma_hi: f64,
     pub sing_lambda_sq: f64,
     pub sing_kd: f64,
+    /// Caps on a commanded impedance ([`ComplianceLimits`]).
+    pub compliance_kp_max: f64,
+    pub compliance_kd_max: f64,
+    pub compliance_kd_min: f64,
     /// Solution check: discard if |τ| exceeds this value × the limit.
     pub solution_check: f64,
     /// Choice of decision variables (misa-wbc's Formulation). With a fixed base
@@ -104,6 +108,11 @@ impl OscConfig {
             sing_sigma_hi: 0.06,
             sing_lambda_sq: 1e-2,
             sing_kd: 10.0,
+            // 4× / 2× the default TCP gains (ω = 40 rad/s), which the real
+            // B601-DM held with motor-side PD. Not yet tried on the arm.
+            compliance_kp_max: 1600.0,
+            compliance_kd_max: 80.0,
+            compliance_kd_min: 4.0,
             solution_check: 1.05,
             formulation: Formulation::AccelSpace,
             friction: None,
@@ -145,6 +154,14 @@ impl OscConfig {
         }
     }
 
+    pub fn compliance_limits(&self) -> ComplianceLimits {
+        ComplianceLimits {
+            kp_max: self.compliance_kp_max,
+            kd_max: self.compliance_kd_max,
+            kd_min: self.compliance_kd_min,
+        }
+    }
+
     pub fn singularity(&self) -> SingularityParams {
         SingularityParams {
             sigma_lo: self.sing_sigma_lo,
@@ -170,6 +187,26 @@ pub struct OscReport {
     pub solve_us: f64,
     /// If only the posture (level 2) degraded this cycle, its status.
     pub degraded: Option<String>,
+    /// Scale the impedance caps put on `[rotation, translation]` (1 = as commanded).
+    pub compliance_scale: [f64; 2],
+}
+
+/// What a TCP command can add to the pose reference.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TcpExtras {
+    /// Wrench the TCP exerts on its surroundings, `[moment; force]` [N·m, N],
+    /// world coordinates, at the TCP point. Commanded open loop as `Jᵀ·w` on
+    /// top of the solved motion (there is no force sensor): in free space the
+    /// arm accelerates along it (held back only by the task's damping and the
+    /// safety constraints); against a surface it presses with about `w`, less
+    /// the joint friction the model does not cancel at rest.
+    pub wrench: Option<Vector6<f64>>,
+    /// Directions (projector, world) left without position feedback under
+    /// the profile's gains: the force-controlled axes of a wrench command.
+    pub free: Option<Matrix6<f64>>,
+    /// Physical impedance instead of the profile's gains (`free` is then
+    /// ignored: a zero stiffness row is free).
+    pub compliance: Option<Compliance>,
 }
 
 /// Operational-space controller. Holds the QP warm-start state.
@@ -221,15 +258,48 @@ impl Osc {
         base: JointCommand,
         cbfs: &[Cbf],
     ) -> Result<(JointCommand, OscReport), WbcError> {
+        self.command_ext(arm, s_full, tcp, posture_full, dt, base, cbfs, &TcpExtras::default())
+    }
+
+    /// [`Self::command_with`] with a commanded wrench and/or impedance.
+    /// The wrench torque is part of the solved torque, so the torque limits
+    /// hold with it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn command_ext(
+        &mut self,
+        arm: &ArmModel,
+        s_full: &ArmState,
+        tcp: &TcpRef,
+        posture_full: &JointRef,
+        dt: f64,
+        base: JointCommand,
+        cbfs: &[Cbf],
+        extras: &TcpExtras,
+    ) -> Result<(JointCommand, OscReport), WbcError> {
         let c = ChainState::new(arm, s_full);
         let cfg = &self.cfg;
         let posture = c.pick_ref(posture_full);
         let tau_max = c.torque_limits(cfg.torque_scale);
 
-        let d = tasks::chain_dynamics(&c, cfg.formulation, cfg.friction.as_ref(), None);
+        // Commanded wrench and impedance: torques on top of the solved motion.
+        let mut compliance_scale = [1.0; 2];
+        let mut wrench = extras.wrench.unwrap_or_else(Vector6::zeros);
+        if let Some(k) = &extras.compliance {
+            let err = tasks::pose_error(&tcp.pose, &c.tcp_pose);
+            let (f, s) = tasks::compliance_wrench(&c, k, &cfg.compliance_limits(), &err, &(tcp.twist - c.tcp_twist));
+            wrench += f;
+            compliance_scale = s;
+        }
+        let push = (extras.wrench.is_some() || extras.compliance.is_some()).then(|| tasks::wrench_torque(&c, &wrench));
+        let d = tasks::chain_dynamics_with(&c, cfg.formulation, cfg.friction.as_ref(), None, push.as_ref());
         let level0 = tasks::physics_and_limits(&c, &d, &tau_max, &cfg.joint_limits(&c));
         let level0 = tasks::with_barriers(level0, &c, &d, cbfs, cfg.cbf_alpha);
-        let tcp_task = tasks::tcp_acceleration(&c, &d, tcp, &cfg.tcp_gains(), cfg.track_orientation, &cfg.singularity());
+        let fb = match (&extras.compliance, &extras.free) {
+            (Some(_), _) => TcpFeedback::Feedforward,
+            (None, Some(p)) => TcpFeedback::Free(p),
+            (None, None) => TcpFeedback::Gains,
+        };
+        let tcp_task = tasks::tcp_acceleration_with(&c, &d, tcp, &cfg.tcp_gains(), cfg.track_orientation, &cfg.singularity(), &fb);
         let qdd_posture = tasks::joint_pd_acceleration(&c, &posture, &c.pick(&cfg.posture_kp), &c.pick(&cfg.posture_kd));
         let level2 = tasks::joint_acceleration(&d, &qdd_posture) + tasks::torque_regularization(&d, cfg.torque_reg);
 
@@ -249,6 +319,7 @@ impl Osc {
                 sigma_min: tcp_task.sigma_min,
                 solve_us: sol.solve_us,
                 degraded: sol.degraded,
+                compliance_scale,
             },
         ))
     }

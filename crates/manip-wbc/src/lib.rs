@@ -25,8 +25,8 @@ pub mod tasks;
 pub mod tracking;
 
 pub use chain::ChainState;
-pub use osc::{Osc, OscConfig, OscError, OscReport};
+pub use osc::{Osc, OscConfig, OscError, OscReport, TcpExtras};
 pub use output::{MotorGains, MotorOutput};
 pub use solve::{solve_levels, Solved, WbcError};
-pub use tasks::{pose_error, Cbf, JointLimitParams, SingularityParams, TcpGains, TcpRef, TcpTask};
+pub use tasks::{pose_error, Cbf, Compliance, ComplianceLimits, JointLimitParams, SingularityParams, TcpGains, TcpRef, TcpTask};
 pub use tracking::{JointTracking, TrackingConfig, TrackingReport};

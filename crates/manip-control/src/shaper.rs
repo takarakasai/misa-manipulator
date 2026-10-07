@@ -62,6 +62,8 @@ pub struct ShaperLimits {
 pub struct JointShaper {
     limits: ShaperLimits,
     r: JointRef,
+    /// The reference [`Self::follow`] was given last (cleared by anything else).
+    followed: Option<JointRef>,
 }
 
 impl JointShaper {
@@ -74,12 +76,14 @@ impl JointShaper {
         Self {
             limits,
             r: JointRef::at_rest(q),
+            followed: None,
         }
     }
 
     /// Re-anchors the reference in place (on mode switch or when reception resumes).
     pub fn reset(&mut self, q: DVector<f64>) {
         self.r = JointRef::at_rest(q);
+        self.followed = None;
     }
 
     pub fn current(&self) -> &JointRef {
@@ -100,6 +104,7 @@ impl JointShaper {
     /// Advances toward `target` by `dt`.
     pub fn step(&mut self, target: &DVector<f64>, dt: f64) -> &JointRef {
         assert!(dt > 0.0);
+        self.followed = None;
         for i in 0..target.len() {
             let (q, v, a) = pursue(
                 self.r.q[i],
@@ -114,6 +119,36 @@ impl JointShaper {
             self.r.v[i] = v;
             self.r.a[i] = a;
         }
+        &self.r
+    }
+
+    /// Follows a reference that already carries velocity and acceleration (a
+    /// trajectory or velocity command generated within the limits). Once on
+    /// it, the reference is taken as is; a gap (a trajectory that starts away
+    /// from the current reference) is closed with this shaper's law in the
+    /// frame moving with `target`, using the speed and acceleration it leaves
+    /// free, so the result does not jump and stays near the limits.
+    pub fn follow(&mut self, target: &JointRef, dt: f64) -> &JointRef {
+        assert!(dt > 0.0);
+        assert_eq!(target.q.len(), self.r.q.len());
+        let prev = self.followed.take().unwrap_or_else(|| target.clone());
+        for i in 0..target.q.len() {
+            let (dq, dv) = (self.r.q[i] - prev.q[i], self.r.v[i] - prev.v[i]);
+            if dq.abs() < 1e-9 && dv.abs() < 1e-9 {
+                self.r.q[i] = target.q[i];
+                self.r.v[i] = target.v[i];
+                self.r.a[i] = target.a[i];
+                continue;
+            }
+            let (v_max, a_max) = (self.limits.v_max[i], self.limits.a_max[i]);
+            let v_free = (v_max - target.v[i].abs()).max(0.1 * v_max);
+            let a_free = (a_max - target.a[i].abs()).max(0.1 * a_max);
+            let (q, v, a) = pursue(dq, dv, 0.0, v_free, a_free, self.limits.time_constant_s, dt);
+            self.r.q[i] = target.q[i] + q;
+            self.r.v[i] = target.v[i] + v;
+            self.r.a[i] = target.a[i] + a;
+        }
+        self.followed = Some(target.clone());
         &self.r
     }
 }
@@ -159,6 +194,8 @@ pub struct TcpShaperLimits {
 pub struct TcpShaper {
     limits: TcpShaperLimits,
     r: TcpRefState,
+    /// The reference [`Self::follow`] was given last (cleared by anything else).
+    followed: Option<TcpRefState>,
 }
 
 impl TcpShaper {
@@ -170,6 +207,7 @@ impl TcpShaper {
                 twist: Vector6::zeros(),
                 accel: Vector6::zeros(),
             },
+            followed: None,
         }
     }
 
@@ -179,6 +217,7 @@ impl TcpShaper {
             twist: Vector6::zeros(),
             accel: Vector6::zeros(),
         };
+        self.followed = None;
     }
 
     pub fn current(&self) -> &TcpRefState {
@@ -186,6 +225,7 @@ impl TcpShaper {
     }
 
     pub fn step(&mut self, target: &Isometry3<f64>, dt: f64) -> &TcpRefState {
+        self.followed = None;
         let l = self.limits;
         // Translation: 1-D tracking along the error vector; velocity orthogonal to it is damped out.
         let p = self.r.pose.translation.vector;
@@ -203,6 +243,54 @@ impl TcpShaper {
         self.r.pose = Isometry3::from_parts(Translation3::from(p_new), dq * rot);
         self.r.twist = stack6(&w_new, &v_new);
         self.r.accel = stack6(&alpha, &a_new);
+        &self.r
+    }
+
+    /// [`JointShaper::follow`] for the TCP: a reference with twist and
+    /// acceleration is taken as is once reached; a gap is closed in the frame
+    /// moving with `target` (translation along the gap vector, rotation about
+    /// the gap axis).
+    pub fn follow(&mut self, target: &TcpRefState, dt: f64) -> &TcpRefState {
+        let l = self.limits;
+        let prev = self.followed.take().unwrap_or_else(|| target.clone());
+        let lin = |x: &Vector6<f64>| x.fixed_rows::<3>(3).into_owned();
+        let ang = |x: &Vector6<f64>| x.fixed_rows::<3>(0).into_owned();
+        let dp = self.r.pose.translation.vector - prev.pose.translation.vector;
+        let dv = lin(&self.r.twist) - lin(&prev.twist);
+        let dr = (self.r.pose.rotation * prev.pose.rotation.inverse()).scaled_axis();
+        let dw = ang(&self.r.twist) - ang(&prev.twist);
+        if dp.norm() < 1e-9 && dv.norm() < 1e-9 && dr.norm() < 1e-9 && dw.norm() < 1e-9 {
+            self.r = target.clone();
+        } else {
+            let free = |max: f64, used: f64| (max - used).max(0.1 * max);
+            let (p, v, a) = pursue_vec(
+                dp,
+                dv,
+                Vector3::zeros(),
+                free(l.lin_v_max, lin(&target.twist).norm()),
+                free(l.lin_a_max, lin(&target.accel).norm()),
+                l.time_constant_s,
+                dt,
+            );
+            let (r, w, alpha) = pursue_vec(
+                dr,
+                dw,
+                Vector3::zeros(),
+                free(l.ang_v_max, ang(&target.twist).norm()),
+                free(l.ang_a_max, ang(&target.accel).norm()),
+                l.time_constant_s,
+                dt,
+            );
+            self.r = TcpRefState {
+                pose: Isometry3::from_parts(
+                    Translation3::from(target.pose.translation.vector + p),
+                    UnitQuaternion::from_scaled_axis(r) * target.pose.rotation,
+                ),
+                twist: target.twist + stack6(&w, &v),
+                accel: target.accel + stack6(&alpha, &a),
+            };
+        }
+        self.followed = Some(target.clone());
         &self.r
     }
 }
@@ -268,6 +356,61 @@ mod tests {
         assert!((r.q[0] - 1.0).abs() < 1e-4 && (r.q[1] + 0.3).abs() < 1e-4);
         assert!(max_q < 1.0 + 2e-3, "overshoot {max_q}");
         assert!(r.v.norm() < 1e-3);
+    }
+
+    /// On a trajectory, `follow` returns it exactly; started away from it, it
+    /// closes the gap within the limits and then rides on it.
+    #[test]
+    fn joint_follow_closes_the_gap_then_rides_the_trajectory() {
+        let dt = 0.002;
+        let traj = |t: f64| JointRef {
+            q: DVector::from_vec(vec![0.5 * t, -0.2]),
+            v: DVector::from_vec(vec![0.5, 0.0]),
+            a: DVector::zeros(2),
+        };
+        let mut s = JointShaper::new(limits(2), DVector::from_vec(vec![0.0, 0.0]));
+        let mut prev_q = s.current().q.clone();
+        for k in 1..=1000 {
+            let r = s.follow(&traj(k as f64 * dt), dt).clone();
+            for i in 0..2 {
+                assert!(r.v[i].abs() <= 1.0 + 1e-9, "v {}", r.v[i]);
+                assert!(r.a[i].abs() <= 4.0 + 1e-9, "a {}", r.a[i]);
+                assert!((r.q[i] - prev_q[i]).abs() <= 1.0 * dt + 1e-9);
+            }
+            prev_q = r.q.clone();
+        }
+        let r = s.current();
+        assert_eq!(r, &traj(1000.0 * dt), "rides the trajectory exactly once on it");
+    }
+
+    #[test]
+    fn tcp_follow_closes_the_gap_then_rides_the_trajectory() {
+        let l = TcpShaperLimits {
+            lin_v_max: 0.3,
+            lin_a_max: 2.0,
+            ang_v_max: 1.5,
+            ang_a_max: 8.0,
+            time_constant_s: 0.05,
+        };
+        let dt = 0.002;
+        let traj = |t: f64| TcpRefState {
+            pose: Isometry3::from_parts(
+                Translation3::new(0.1 * t, 0.2, 0.3),
+                UnitQuaternion::from_euler_angles(0.0, 0.0, 0.2 * t),
+            ),
+            twist: Vector6::new(0.0, 0.0, 0.2, 0.1, 0.0, 0.0),
+            accel: Vector6::zeros(),
+        };
+        let mut s = TcpShaper::new(l, Isometry3::translation(0.0, 0.15, 0.3));
+        for k in 1..=1500 {
+            let r = s.follow(&traj(k as f64 * dt), dt).clone();
+            assert!(r.twist.fixed_rows::<3>(3).norm() <= 0.3 + 1e-6);
+            assert!(r.twist.fixed_rows::<3>(0).norm() <= 1.5 + 1e-6);
+        }
+        let (r, want) = (s.current(), traj(1500.0 * dt));
+        assert!((r.pose.translation.vector - want.pose.translation.vector).norm() < 1e-6);
+        assert!(r.pose.rotation.angle_to(&want.pose.rotation) < 1e-6);
+        assert!((r.twist - want.twist).norm() < 1e-6);
     }
 
     #[test]

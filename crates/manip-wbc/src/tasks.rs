@@ -8,7 +8,7 @@ use manip_control::{FrictionModel, JointRef};
 use misa_wbc::dynamics::{Dynamics, Formulation};
 use misa_wbc::tasks::{self, JointLimitCbf};
 use misa_wbc::{AsAffine, Task};
-use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Vector6};
+use nalgebra::{DMatrix, DVector, Isometry3, Matrix6, Vector3, Vector6};
 
 use crate::chain::{finite_or, ChainState};
 
@@ -225,6 +225,131 @@ impl TcpTask {
     }
 }
 
+/// A Cartesian impedance at the TCP in physical units: the spring and damper
+/// `F = K·e + D·ė` (`[moment; force]` from `[rotation; translation]` error,
+/// world coordinates, so a tool-frame impedance is `R·K·Rᵀ` per block),
+/// applied as the joint torque `Jᵀ·F` on top of the solved motion, against
+/// the arm's own inertia. Without a force sensor this is what gives the
+/// commanded stiffness against an outside push (`K·e = −F_ext` at rest); a
+/// zero row of `K` leaves that direction free.
+///
+/// It is a torque, not a TCP acceleration in the QP: holding against a push
+/// as an acceleration means commanding `q̈ = −M⁻¹·τ_ext` (which never
+/// happens: the push cancels it), and for the light B601 wrist that reached
+/// the 50 rad/s² bound at a 6 N push, after which the arm swung.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compliance {
+    pub stiffness: Matrix6<f64>,
+    /// `None`: critically damped against the arm's inertia, mode by mode,
+    /// recomputed every cycle (the inertia changes with the pose).
+    pub damping: Option<Matrix6<f64>>,
+}
+
+/// Caps on what a [`Compliance`] may ask of the loop, in acceleration units
+/// (`‖Λ⁻¹K‖` [1/s²], `‖Λ⁻¹D‖` [1/s], rotational and translational rows
+/// separately). The B601 wrist is so light (`Λ⁻¹` ≈ 180 rad/s² per N·m at
+/// ready) that a modest physical damping is a gain the 500 Hz loop cannot
+/// hold; above a cap the block's feedback is scaled down (softer than asked,
+/// reported as [`TcpTask::compliance_scale`]).
+#[derive(Debug, Clone, Copy)]
+pub struct ComplianceLimits {
+    pub kp_max: f64,
+    pub kd_max: f64,
+    /// Damping floor on every mode [1/s], so free axes (zero stiffness) do not
+    /// coast when pushed or driven by a commanded force. Kept low: a soft
+    /// mode with more than critical damping creeps (ω = 1 rad/s with 10/s
+    /// settles in ~10 s).
+    pub kd_min: f64,
+}
+
+/// `Λ⁻¹ = J·M⁻¹·Jᵀ` of the TCP (6×6, `[ω; v]` rows). Defined at singularities too.
+pub fn tcp_inverse_inertia(c: &ChainState) -> Matrix6<f64> {
+    let minv_jt = c
+        .mass
+        .clone()
+        .cholesky()
+        .map(|ch| ch.solve(&c.tcp_jacobian.transpose()))
+        .unwrap_or_else(|| DMatrix::zeros(c.n(), 6));
+    let l = &c.tcp_jacobian * minv_jt;
+    Matrix6::from_fn(|i, j| l[(i, j)])
+}
+
+/// Joint torque that makes the TCP exert `wrench` (`[moment; force]`, world
+/// coordinates, at the TCP point) on its surroundings: `Jᵀ·w`.
+pub fn wrench_torque(c: &ChainState, wrench: &Vector6<f64>) -> DVector<f64> {
+    c.tcp_jacobian.transpose() * wrench
+}
+
+/// The wrench of a [`Compliance`] for the error `err` and twist error
+/// `twist_err`, and the `[rotation, translation]` scales the limits applied.
+///
+/// The limits are checked in the arm's modal coordinates `y = Λ^½·e`, where
+/// `ÿ = −S·y − S_d·ẏ` with the symmetric `S = Λ^-½·K·Λ^-½` (each eigenvalue
+/// is a mode's ω²) and `S_d = Λ^-½·D·Λ^-½`; critical damping `S_d = 2·√S` is
+/// exact there for the coupled rotation/translation of the wrist. Above the
+/// limits the **rotational** block of `K` (then `D`) is scaled down first,
+/// then the translational one: the fast modes come from the light wrist, and
+/// scaling whole blocks keeps `K` free of rotation/translation coupling
+/// (clamping modes instead made a pure push tilt the wrist).
+pub fn compliance_wrench(
+    c: &ChainState,
+    k: &Compliance,
+    lim: &ComplianceLimits,
+    err: &Vector6<f64>,
+    twist_err: &Vector6<f64>,
+) -> (Vector6<f64>, [f64; 2]) {
+    let linv = tcp_inverse_inertia(c);
+    let eig = linv.symmetric_eigen();
+    // Directions the arm cannot move in (singular) get a small Λ⁻¹, not
+    // zero, so Λ^½ stays finite (`Jᵀ·Λ^½` stays bounded there).
+    let mu_floor = eig.eigenvalues.max().max(1e-9) * 1e-6;
+    let mu = eig.eigenvalues.map(|m| m.max(mu_floor));
+    let v = &eig.eigenvectors;
+    let half = |p: f64| v * Matrix6::from_diagonal(&mu.map(|m| m.powf(p))) * v.transpose();
+    let (linv_half, l_half) = (half(0.5), half(-0.5));
+    let modal = |m: &Matrix6<f64>| {
+        let s = linv_half * m * linv_half;
+        (s + s.transpose()) * 0.5
+    };
+    let top = |m: &Matrix6<f64>| modal(m).symmetric_eigenvalues().max();
+    let scaled = |m: &Matrix6<f64>, s: [f64; 2]| {
+        Matrix6::from_fn(|i, j| m[(i, j)] * if i < 3 && j < 3 { s[0] } else if i >= 3 && j >= 3 { s[1] } else { (s[0] * s[1]).sqrt() })
+    };
+    // The largest block scales (rotation first) that keep the top mode under `max`.
+    let fit = |m: &Matrix6<f64>, max: f64| -> [f64; 2] {
+        if top(m) <= max {
+            return [1.0, 1.0];
+        }
+        let search = |f: &dyn Fn(f64) -> f64| {
+            let (mut lo, mut hi) = (0.0, 1.0);
+            for _ in 0..20 {
+                let mid = 0.5 * (lo + hi);
+                if f(mid) <= max { lo = mid } else { hi = mid }
+            }
+            lo
+        };
+        if top(&scaled(m, [0.0, 1.0])) <= max {
+            [search(&|x| top(&scaled(m, [x, 1.0]))), 1.0]
+        } else {
+            [0.0, search(&|x| top(&scaled(m, [0.0, x])))]
+        }
+    };
+    let ks = fit(&k.stiffness, lim.kp_max.min(0.25 * lim.kd_max * lim.kd_max));
+    let stiffness = scaled(&k.stiffness, ks);
+    let damping = match &k.damping {
+        Some(d) => scaled(d, fit(d, lim.kd_max)),
+        None => {
+            // Critical on the (scaled) stiffness, at least the floor:
+            // D = Λ^½·S_d·Λ^½.
+            let e = modal(&stiffness).symmetric_eigen();
+            let vals = e.eigenvalues.map(|x| (2.0 * x.max(0.0).sqrt()).max(lim.kd_min).min(lim.kd_max));
+            let s_d = e.eigenvectors * Matrix6::from_diagonal(&vals) * e.eigenvectors.transpose();
+            l_half * s_d * l_half
+        }
+    };
+    (stiffness * err + damping * twist_err, ks)
+}
+
 /// TCP acceleration `J·q̈ + J̇v = a_ref + Kp·e + Kd·ė` (with singularity damping).
 pub fn tcp_acceleration(
     c: &ChainState,
@@ -234,11 +359,45 @@ pub fn tcp_acceleration(
     track_orientation: bool,
     sing: &SingularityParams,
 ) -> TcpTask {
+    tcp_acceleration_with(c, d, tcp, gains, track_orientation, sing, &TcpFeedback::Gains)
+}
+
+/// How the TCP task turns the pose and twist error into acceleration.
+#[derive(Debug, Clone, Copy)]
+pub enum TcpFeedback<'a> {
+    /// The profile's gains (acceleration units).
+    Gains,
+    /// The profile's gains without position feedback along the directions
+    /// spanned by this projector (world): force-controlled axes, which then
+    /// only keep the damping.
+    Free(&'a Matrix6<f64>),
+    /// No feedback (`a_ref` only): the pose is held by torques outside the
+    /// QP (a [`Compliance`]).
+    Feedforward,
+}
+
+/// [`tcp_acceleration`] with the feedback chosen by `fb`.
+pub fn tcp_acceleration_with(
+    c: &ChainState,
+    d: &Dynamics,
+    tcp: &TcpRef,
+    gains: &TcpGains,
+    track_orientation: bool,
+    sing: &SingularityParams,
+    fb: &TcpFeedback,
+) -> TcpTask {
     let err = pose_error(&tcp.pose, &c.tcp_pose);
     let twist_err = tcp.twist - c.tcp_twist;
     let kp = Vector6::new(gains.kp_ang, gains.kp_ang, gains.kp_ang, gains.kp_lin, gains.kp_lin, gains.kp_lin);
     let kd = Vector6::new(gains.kd_ang, gains.kd_ang, gains.kd_ang, gains.kd_lin, gains.kd_lin, gains.kd_lin);
-    let a_ref = tcp.accel + kp.component_mul(&err) + kd.component_mul(&twist_err);
+    let a_ref = match fb {
+        TcpFeedback::Gains => tcp.accel + kp.component_mul(&err) + kd.component_mul(&twist_err),
+        TcpFeedback::Free(p) => {
+            let held = Matrix6::identity() - *p;
+            tcp.accel + held * kp.component_mul(&(held * err)) + kd.component_mul(&twist_err)
+        }
+        TcpFeedback::Feedforward => tcp.accel,
+    };
     let rows: std::ops::Range<usize> = if track_orientation { 0..6 } else { 3..6 };
     let j = c.tcp_jacobian.rows(rows.start, rows.len()).into_owned();
     let djv = DVector::from_iterator(rows.len(), rows.clone().map(|r| c.tcp_jdot_v[r]));
