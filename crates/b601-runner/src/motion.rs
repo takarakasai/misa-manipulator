@@ -407,6 +407,15 @@ impl Executive {
         self.shutdown
     }
 
+    /// The run ends folded: a pending park / shutdown is done, anything else
+    /// is aborted.
+    pub fn ended(&mut self) {
+        if let Some(id) = self.parking.take() {
+            self.set(id, State::Done, None);
+        }
+        self.abort_all("the run ended");
+    }
+
     /// Nothing scheduled, queued or running (scripts end here).
     pub fn idle(&self) -> bool {
         self.scripted.is_empty()

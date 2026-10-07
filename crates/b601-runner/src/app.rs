@@ -416,6 +416,9 @@ pub fn run(
         };
         if policy.mode() == Mode::Done && !keep_up {
             log::info!("finished folding");
+            if let Source::Api(a) = &mut source {
+                a.exec.ended();
+            }
             break Ok(());
         }
         let mut requests = Vec::new();
@@ -585,6 +588,10 @@ pub fn run(
     }
     if policy.osc_failures() > 0 {
         log::warn!("times OSC failed to solve and fell back to hold: {}", policy.osc_failures());
+    }
+    if matches!(source, Source::Api(_)) && !opts.fast {
+        // Let API requests waiting on the shutdown get their reply out.
+        std::thread::sleep(Duration::from_millis(200));
     }
     result
 }

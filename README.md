@@ -29,7 +29,9 @@
 | 安全 | `[safety]`: 手先・肘・手首を作業空間の箱の中に、リンク同士を離しておく（OSC は CBF、関節追従は参照のガード） |
 | Park | 終了時（`--duration` 経過・Ctrl-C）に休止姿勢へ畳んでから脱力 |
 
-目標の出どころ（`--source`）: リーダーアーム / 合成の正弦波 / TCP の円 / なし。
+目標の出どころ（`--source`）: リーダーアーム / 合成の正弦波 / TCP の円 / 実行ログ /
+**運動指令 API**（`api`: HTTP/JSON で関節・TCP の移動、経由点、速度・加速度、力・インピーダンス、
+関節トルク、グリッパ、モード切替。`script`: 同じ指令を JSON ファイルから。`doc/api.md`）/ なし。
 
 ## 構成
 
@@ -112,6 +114,14 @@ manip run --robot robots/rebot_b601_dm.toml --plant virtual-can --source sine --
 manip run ... --log logs/run.mrec
 manip replay logs/run.mrec                 # 記録時のプロファイルで
 manip replay logs/run.mrec --robot <別のプロファイル>
+
+# 運動指令 API（doc/api.md）。ループバック以外で待ち受けるならトークン必須
+manip run --robot robots/rebot_b601_dm.toml --plant rigid --source api
+manip cmd move/pose name=ready --wait
+manip cmd move/tcp position=0,0,-0.05 relative=true --wait
+manip cmd state
+# 同じ指令を JSON の手順書から（シムなら --fast）
+manip run --robot robots/rebot_b601_dm.toml --plant rigid --source script --script motions.json --fast
 ```
 
 Ctrl-C 1 回目で休止姿勢へ畳んでから脱力、2 回目で即脱力（**腕は落ちる**）。
