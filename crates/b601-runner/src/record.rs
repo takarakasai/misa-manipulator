@@ -31,7 +31,8 @@ impl Recorder {
                 cols.push(format!("{k}_{}", d.name));
             }
         }
-        for k in ["tcp_x", "tcp_y", "tcp_z", "ref_x", "ref_y", "ref_z", "sigma_min"] {
+        // goal: the TCP the target asks for (FK of a joint target).
+        for k in ["tcp_x", "tcp_y", "tcp_z", "ref_x", "ref_y", "ref_z", "sigma_min", "goal_x", "goal_y", "goal_z"] {
             cols.push(k.into());
         }
         writeln!(w, "{}", cols.join(","))?;
@@ -66,7 +67,11 @@ impl Recorder {
             .map(|x| x.translation.vector)
             .unwrap_or(nalgebra::Vector3::from_element(f64::NAN));
         let sigma = info.osc.as_ref().map(|o| o.sigma_min).unwrap_or(f64::NAN);
-        out += &format!(",{:.5},{:.5},{:.5},{:.5},{:.5},{:.5},{:.4}", p.x, p.y, p.z, r.x, r.y, r.z, sigma);
+        let g = info.tcp_goal.map(|x| x.translation.vector).unwrap_or(nalgebra::Vector3::from_element(f64::NAN));
+        out += &format!(
+            ",{:.5},{:.5},{:.5},{:.5},{:.5},{:.5},{:.4},{:.5},{:.5},{:.5}",
+            p.x, p.y, p.z, r.x, r.y, r.z, sigma, g.x, g.y, g.z
+        );
         writeln!(self.w, "{out}")
     }
 }

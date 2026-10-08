@@ -310,3 +310,20 @@ fn joint_torque_stops_pushing_near_a_limit() {
     assert!(top < 2.8 - 0.02, "reached the stop: {top}");
     let _ = t;
 }
+
+/// With sticking friction a joint can stop just outside the Park tolerance
+/// for good; Park then finishes after settling instead of holding forever.
+#[test]
+fn park_finishes_when_friction_holds_a_joint_short() {
+    // A sticky, softly held wrist (1.5 N·m against 6 N·m/rad) stops short of rest.
+    let stiction = |t: String| t.replace("[sim]\n", "[sim]\nstiction = true\n").replace("sim_friction = 0.22", "sim_friction = 1.5").replace("hold_kp = 18.0", "hold_kp = 6.0");
+    let script = [(1.0, "move/joint", json!({"q": {"joint4": 0.6, "joint2": -0.6}, "relative": true}))];
+    let r = run_script(stiction, &script, 4.0, "park");
+    let modes = r.modes();
+    assert_eq!(modes.last().map(String::as_str), Some("Done"), "never finished parking");
+    let t = r.col("t");
+    let off = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"].iter().map(|j| r.col(&format!("q_{j}")).last().unwrap().abs()).fold(0.0, f64::max);
+    eprintln!("parked {:.1} s after the end, {off:.3} rad from rest", t[t.len() - 1] - 4.0);
+    assert!(off > 0.05, "the test should leave a joint outside the tolerance ({off})");
+    assert!(t[t.len() - 1] < 4.0 + 15.0);
+}

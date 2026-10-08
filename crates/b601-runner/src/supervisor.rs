@@ -114,6 +114,9 @@ pub struct TickInfo {
     /// Set on the first guarded tick of an episode: what the refused step's
     /// stopping point would have violated (for the operator log).
     pub guard_reason: Option<String>,
+    /// The TCP the target asks for (a joint target by its forward
+    /// kinematics), in the modes that follow a target. For the record.
+    pub tcp_goal: Option<Isometry3<f64>>,
 }
 
 pub struct SupervisorConfig {
@@ -155,6 +158,8 @@ pub struct Supervisor {
     pub osc_failures: u64,
     /// The previous Joint-mode tick was guarded (episodes are logged once).
     guarding: bool,
+    /// How long the Park reference has been at the rest pose [s].
+    park_settle_s: f64,
 }
 
 impl Supervisor {
@@ -185,6 +190,7 @@ impl Supervisor {
             t: 0.0,
             osc_failures: 0,
             guarding: false,
+            park_settle_s: 0.0,
         }
     }
 
@@ -234,6 +240,16 @@ impl Supervisor {
         let now = self.t;
         self.t += dt;
         let mut info = TickInfo::default();
+        if matches!(self.mode, Mode::Joint | Mode::Osc | Mode::Mpc) {
+            info.tcp_goal = match target {
+                Target::Tcp { pose, .. } => Some(*pose),
+                Target::TcpRef { tcp, .. } => Some(tcp.pose),
+                Target::Joint(q) | Target::JointRef { r: JointRef { q, .. }, .. } => {
+                    Some(arm.tcp_pose(clamp_to_limits(arm, q).as_slice()))
+                }
+                Target::None => None,
+            };
+        }
         let ramp = if self.cfg.startup_ramp_s > 0.0 {
             (self.t / self.cfg.startup_ramp_s).min(1.0)
         } else {
@@ -416,11 +432,23 @@ impl Supervisor {
                 let goal = clamp_to_limits(arm, &self.cfg.rest);
                 let r = step_with_limits(&mut self.shaper, &limits, &goal, dt);
                 let c = self.hold.command(arm, s, &r);
-                let reached = (&r.q - &goal).amax() < 1e-4
-                    && (&s.q - &goal).amax() < self.cfg.park_tolerance;
+                let ref_home = (&r.q - &goal).amax() < 1e-4;
+                self.park_settle_s = if ref_home { self.park_settle_s + dt } else { 0.0 };
+                let off = (&s.q - &goal).amax();
+                // Sticking friction can hold a joint just outside the
+                // tolerance for good (the wrist at 0.07 rad in the stiction
+                // sim, parking forever): after PARK_SETTLE_S at home, settle
+                // for 3× the tolerance; farther off, keep holding.
+                let reached = ref_home
+                    && (off < self.cfg.park_tolerance
+                        || (self.park_settle_s > PARK_SETTLE_S && off < 3.0 * self.cfg.park_tolerance));
                 info.reference = Some(r);
                 if reached {
-                    info.transition = Some("Park → Done".into());
+                    info.transition = Some(if off < self.cfg.park_tolerance {
+                        "Park → Done".into()
+                    } else {
+                        format!("Park → Done ({off:.3} rad from the rest pose, held there by friction)")
+                    });
                     self.mode = Mode::Done;
                     self.hold_q = goal;
                 }
@@ -441,6 +469,9 @@ fn step_with_limits(shaper: &mut JointShaper, limits: &ShaperLimits, goal: &DVec
     shaper.restore(r.clone());
     r
 }
+
+/// Park finishes slightly outside its tolerance after this long at home [s].
+const PARK_SETTLE_S: f64 = 2.0;
 
 /// Fraction of the shaper's acceleration limit used when the safety guard
 /// brakes the joint reference.
