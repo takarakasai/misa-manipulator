@@ -196,6 +196,16 @@ a_max = 50.0
 lin_v_max = 0.3
 ang_v_max = 1.5
 
+# ── MPC (--mode mpc, or the API's via: "mpc" / teleop control: "mpc") ──
+# Plans continue from the tracked plan by default (replan_from_reference).
+# target_lookahead_s: leader targets move on at their estimated velocity for
+# this long over the horizon. Replaying the 12 real teleop sessions it cut the
+# TCP error 15 % (p95 30 %) at about twice the torque ripple (handover §5e).
+# On trial since 2026-10-08, not yet run on the arm: set 0 if the 3-8 Hz
+# shaking of fast teleop comes back.
+[mpc]
+target_lookahead_s = 0.15
+
 # ── Sim (MuJoCo) ────────────────────────────────────────────────────
 [sim]
 timestep_s = 0.0005

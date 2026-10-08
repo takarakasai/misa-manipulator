@@ -844,9 +844,12 @@ fn dm_wrist_range_is_not_guarded() {
     }
 }
 
-/// Profile text with an `[mpc]` planner selected.
+/// Profile text with an `[mpc]` planner selected (in the profile's section).
 fn with_planner(planner: &'static str) -> impl Fn(String) -> String {
-    move |t: String| format!("{t}\n[mpc]\nplanner = \"{planner}\"\n")
+    move |t: String| {
+        assert!(t.contains("\n[mpc]\n"), "the profile has an [mpc] section");
+        t.replacen("\n[mpc]\n", &format!("\n[mpc]\nplanner = \"{planner}\"\n"), 1)
+    }
 }
 
 /// Mpc mode (planner + joint-tracking WBC) follows a 3 cm circle better than

@@ -45,11 +45,11 @@ ARM = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 CONFIGS = {
     "joint": ("joint", {}),
     "osc": ("osc", {}),
-    "ltv": ("mpc", {"planner": '"ltv"'}),
+    "ltv": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[]"}),
     "ltv_ref_ki": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[0.05, 0.5]", "track_ki": "100.0"}),
-    "ilqr": ("mpc", {"planner": '"ilqr"'}),
+    "ilqr": ("mpc", {"planner": '"ilqr"', "replan_from_reference": "[]"}),
     "ilqr_ref_ki": ("mpc", {"planner": '"ilqr"', "replan_from_reference": "[0.05, 0.5]", "track_ki": "100.0"}),
-    "ltv_ki": ("mpc", {"planner": '"ltv"', "track_ki": "100.0"}),
+    "ltv_ki": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[]", "track_ki": "100.0"}),
     "ltv_ref": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[0.05, 0.5]"}),
     "ltv_look": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[0.05, 0.5]", "track_ki": "100.0", "target_lookahead_s": "0.15"}),
     "ltv_ref_look": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[0.05, 0.5]", "target_lookahead_s": "0.15"}),
@@ -72,11 +72,13 @@ def profile_text(edits: dict, sim: str = "tanh") -> str:
         t = t.replace("[sim]\n", "[sim]\nstiction = true\n", 1)
     if k != 1.0:
         t = re.sub(r"^sim_friction = ([0-9.]+)", lambda m: f"sim_friction = {float(m.group(1)) * k:.4f}", t, flags=re.M)
-    if edits:
-        body = "".join(f"{k} = {v}\n" for k, v in edits.items())
-        if re.search(r"^\[mpc\]", t, re.M):
-            raise SystemExit("profile already has [mpc]; merge the edits by hand")
-        t += "\n[mpc]\n" + body
+    # The configuration replaces the profile's [mpc] keys entirely (so each
+    # config is the defaults plus exactly its edits).
+    m = re.search(r"^\[mpc\]\n(?:(?!\[)[^\n]*\n)*", t, re.M)
+    if m:
+        t = t[: m.start()] + t[m.end():]
+    body = "".join(f"{k} = {v}\n" for k, v in edits.items())
+    t += "\n[mpc]\n" + body
     return t
 
 

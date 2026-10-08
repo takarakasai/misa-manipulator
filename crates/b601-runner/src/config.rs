@@ -79,9 +79,12 @@ pub struct MpcSection {
     #[serde(default = "d005")]
     pub target_v_tau_s: f64,
     /// Continue plans from the tracked plan while the measurement is within
-    /// `[|Δq| rad, |Δv| rad/s]` of it (`MpcDriver::from_reference`); empty =
-    /// always from the measurement.
-    #[serde(default)]
+    /// `[|Δq| rad, |Δv| rad/s]` of it (`MpcDriver::from_reference`); `[]` =
+    /// always from the measurement. On by default: replaying 12 real teleop
+    /// sessions with sticking friction, plans from the measurement swung the
+    /// arm at rest (75 mm/s) and these held it (1 mm/s), at the same accuracy
+    /// without stiction (`scripts/teleop_study.py`, handover §5e).
+    #[serde(default = "default_replan_from_reference")]
     pub replan_from_reference: Vec<f64>,
     /// LTV: QP solves per plan, re-linearizing around each solution; 0 = the
     /// planner's default. One step from the previous plan can be far off near
@@ -109,7 +112,7 @@ impl Default for MpcSection {
             plan_timeout_s: 0.3,
             target_lookahead_s: 0.0,
             target_v_tau_s: 0.05,
-            replan_from_reference: Vec::new(),
+            replan_from_reference: default_replan_from_reference(),
             sqp_iters: 0,
             track_ki: 0.0,
             track_i_max_friction: 1.5,
@@ -119,6 +122,10 @@ impl Default for MpcSection {
 
 fn default_planner() -> String {
     "ltv".into()
+}
+
+fn default_replan_from_reference() -> Vec<f64> {
+    vec![0.05, 0.5]
 }
 
 fn d20() -> f64 {
