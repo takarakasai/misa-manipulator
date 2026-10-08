@@ -60,6 +60,11 @@ pub struct MpcReport {
     /// TCP position error now, and predicted at the end of the horizon [m];
     /// orientation error at the end [rad].
     pub tcp_pos_err_now: f64,
+    /// Distance from the TCP now to the goal at the end of the horizon [m]:
+    /// what a plan should not end farther from. Equal to `tcp_pos_err_now`
+    /// for a fixed goal; for a moving (previewed) goal the end target is
+    /// elsewhere, and one plan only closes `e_max_pos` of the way.
+    pub tcp_pos_err_now_to_end: f64,
     pub tcp_pos_err_end: f64,
     pub tcp_rot_err_end: f64,
 }

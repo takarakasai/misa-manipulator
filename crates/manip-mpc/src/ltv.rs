@@ -596,7 +596,9 @@ impl Planner for LtvMpc {
         let tcp_end = arm.tcp_pose(&qf);
         let target_end = (goal.tcp)(t + nh as f64 * h);
         let e_end = pose_error(&target_end, &tcp_end);
-        let e_now = pose_error(&(goal.tcp)(t), &arm.tcp_pose(q_all));
+        let tcp_now = arm.tcp_pose(q_all);
+        let e_now = pose_error(&(goal.tcp)(t), &tcp_now);
+        let e_now_to_end = pose_error(&target_end, &tcp_now);
         self.prev = Some(plan.clone());
         Ok((
             plan,
@@ -609,6 +611,7 @@ impl Planner for LtvMpc {
                 status,
                 relaxed,
                 tcp_pos_err_now: e_now.fixed_rows::<3>(3).norm(),
+                tcp_pos_err_now_to_end: e_now_to_end.fixed_rows::<3>(3).norm(),
                 tcp_pos_err_end: e_end.fixed_rows::<3>(3).norm(),
                 tcp_rot_err_end: e_end.fixed_rows::<3>(0).norm(),
             },

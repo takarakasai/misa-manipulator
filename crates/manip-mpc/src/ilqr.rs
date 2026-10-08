@@ -522,7 +522,9 @@ impl Planner for IlqrMpc {
             v: traj.v.clone(),
             a,
         };
-        let e_now = pose_error(&p.targets[0], &arm.tcp_pose(q_all));
+        let tcp_now = arm.tcp_pose(q_all);
+        let e_now = pose_error(&p.targets[0], &tcp_now);
+        let e_now_to_end = pose_error(&p.targets[nh], &tcp_now);
         let e_end = pose_error(&p.targets[nh], &traj.evals[nh].tcp);
         self.prev = Some(Prev {
             t0: t,
@@ -544,6 +546,7 @@ impl Planner for IlqrMpc {
                 status,
                 relaxed: false,
                 tcp_pos_err_now: e_now.fixed_rows::<3>(3).norm(),
+                tcp_pos_err_now_to_end: e_now_to_end.fixed_rows::<3>(3).norm(),
                 tcp_pos_err_end: e_end.fixed_rows::<3>(3).norm(),
                 tcp_rot_err_end: e_end.fixed_rows::<3>(0).norm(),
             },
