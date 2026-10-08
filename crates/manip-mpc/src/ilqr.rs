@@ -451,6 +451,13 @@ impl Planner for IlqrMpc {
         let (mut lin_us, mut bwd_us) = (0.0, 0.0);
         let mut iters = 0;
         let mut status = "max_iters".to_string();
+        // Every plan starts from the initial regularization. Carried over, μ
+        // only came down on accepted steps, so a few failed line searches
+        // pinned it at mu_max: every later step was microscopic and the plans
+        // held the arm (replaying the real hw_lead_mpc5 targets: μ = 1e6 from
+        // 8 s on, the arm frozen 13-27 cm from a moving leader). The real
+        // hw_lead_mpc6 run, 33 cm off at rest, looks the same.
+        self.mu = cfg.mu0;
         for _ in 0..cfg.max_iters {
             iters += 1;
             // ── linearize ────────────────────────────────────────────────
@@ -505,9 +512,13 @@ impl Planner for IlqrMpc {
                     }
                 }
                 None => {
-                    self.mu = (self.mu * 10.0).min(cfg.mu_max);
+                    // Retry with more regularization (shorter, safer steps)
+                    // until the cap.
                     status = "no decrease".into();
-                    break;
+                    if self.mu >= cfg.mu_max {
+                        break;
+                    }
+                    self.mu = (self.mu * 10.0).max(cfg.mu_min * 10.0).min(cfg.mu_max);
                 }
             }
         }
