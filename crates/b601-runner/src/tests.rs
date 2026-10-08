@@ -1008,3 +1008,65 @@ fn wbc_solves_the_state_activeset_called_infeasible() {
     let j2 = arm.dof("joint2").unwrap();
     assert!(rep.qddot[j2] < -0.89, "shoulder must brake toward its limit: {}", rep.qddot[j2]);
 }
+
+/// The motor is never told to exert more than `force_limit`, however far the
+/// reference has run ahead of a blocked joint (the real B601-DM gripper,
+/// closing on a 350 ml can, was pushed with ~1200 N and broke a finger).
+#[test]
+fn force_cap_bounds_a_blocked_gripper() {
+    use misa_core::{AxisCommand, AxisId, Command, ControlMode, Observation};
+    let mut cmd = Command::idle(1);
+    *cmd.get_mut(AxisId::new(0)).unwrap() = AxisCommand {
+        mode: ControlMode::Impedance,
+        position_rad: 0.012,
+        velocity_rad_s: -0.021,
+        torque_ff_nm: -3.6,
+        kp_nm_per_rad: 1.0e5,
+        kd_nm_s_per_rad: 2.5e3,
+    };
+    let mut obs = Observation::empty(1, 0);
+    let o = obs.get_mut(AxisId::new(0)).unwrap();
+    o.position_rad = 0.024;
+    o.velocity_rad_s = 0.0;
+    let capped = crate::policy::cap_force(&mut cmd, &obs, &[20.0]);
+    let c = cmd.get(AxisId::new(0)).unwrap();
+    let f = c.kp_nm_per_rad * (c.position_rad - 0.024) + c.kd_nm_s_per_rad * c.velocity_rad_s + c.torque_ff_nm;
+    assert_eq!(capped, vec![0]);
+    assert!((f.abs() - 20.0).abs() < 1e-9, "commanded force {f}");
+    assert!(c.position_rad < 0.024, "still pushes toward the reference");
+    // Within the limit nothing changes.
+    let before = *c;
+    let capped = crate::policy::cap_force(&mut cmd, &obs, &[20.0]);
+    assert!(capped.is_empty());
+    assert_eq!(*cmd.get(AxisId::new(0)).unwrap(), before);
+}
+
+/// The whole policy, Park with the gripper stuck open: every command stays
+/// within the gripper's force limit.
+#[test]
+fn park_with_a_stuck_gripper_stays_within_its_force_limit() {
+    use misa_core::{AxisId, Observation};
+    let (p, arm) = robot("rebot_b601_dm");
+    let n = arm.n();
+    let g = arm.dof("finger_left").unwrap();
+    let lim = p.joint.iter().find(|j| j.name == "finger_left").unwrap().force_limit.unwrap();
+    let mut q0 = nalgebra::DVector::zeros(n);
+    q0[g] = 0.031;
+    let mut policy = crate::policy::Policy::new(&p, &arm, &q0).unwrap();
+    let mut obs = Observation::empty(n, 0);
+    for i in 0..n {
+        let o = obs.get_mut(AxisId::new(i as u16)).unwrap();
+        o.position_rad = q0[i];
+        o.health.valid = true;
+    }
+    let mut worst: f64 = 0.0;
+    for k in 0..1500 {
+        let req = if k == 0 { vec![Mode::Park] } else { vec![] };
+        policy.step(&arm, &obs, &req, &crate::supervisor::Target::None, None);
+        let c = policy.command().get(AxisId::new(g as u16)).unwrap();
+        let f = c.kp_nm_per_rad * (c.position_rad - q0[g]) + c.kd_nm_s_per_rad * c.velocity_rad_s + c.torque_ff_nm;
+        worst = worst.max(f.abs());
+    }
+    eprintln!("worst commanded gripper force {worst:.2} N (limit {lim})");
+    assert!(worst <= lim + 1e-6, "{worst} N > {lim} N");
+}

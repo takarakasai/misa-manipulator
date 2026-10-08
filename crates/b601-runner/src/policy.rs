@@ -26,6 +26,8 @@ pub struct Policy {
     gate: SafetyGate,
     cmd: Command,
     dt: f64,
+    /// Per axis: cap on the commanded impedance force (see `cap_force`).
+    force_limit: Vec<f64>,
 }
 
 /// What one step produced (beyond the command itself).
@@ -35,6 +37,8 @@ pub struct StepOut {
     pub joint_command: JointCommand,
     pub info: TickInfo,
     pub verdict: SafetyVerdict,
+    /// Axes whose command `cap_force` pulled in this step.
+    pub force_capped: Vec<usize>,
 }
 
 impl Policy {
@@ -51,6 +55,7 @@ impl Policy {
             gate: SafetyGate::new(assemble::safety_config(profile, arm)),
             cmd: Command::idle(arm.n()),
             dt: 1.0 / profile.control.rate_hz,
+            force_limit: assemble::force_limits(profile, arm),
         })
     }
 
@@ -94,11 +99,14 @@ impl Policy {
         let (jc, info) = self.sup.tick(arm, &s, target, self.dt);
         to_command(&jc, &mut self.cmd);
         let verdict = self.gate.apply(&mut self.cmd, obs, Duration::from_secs_f64(self.dt));
+        // Last, after the gate (which may move the position command).
+        let force_capped = cap_force(&mut self.cmd, obs, &self.force_limit);
         StepOut {
             state: s,
             joint_command: jc,
             info,
             verdict,
+            force_capped,
         }
     }
 }
@@ -116,4 +124,47 @@ fn to_command(jc: &JointCommand, cmd: &mut Command) {
             };
         }
     }
+}
+
+/// Keep what each motor is told to exert within `limit`: the MIT law
+/// `kp·(q_cmd − q) + kd·(v_cmd − v) + τ_ff`, evaluated at the measurement, is
+/// scaled back toward the measured state (position and velocity errors
+/// together; `τ_ff` itself clamped first). The SafetyGate only bounds `τ_ff`;
+/// the motor's own PD had no bound, so a blocked joint whose reference kept
+/// moving was pushed with the motor's full torque. Returns the capped axes.
+pub(crate) fn cap_force(cmd: &mut Command, obs: &Observation, limit: &[f64]) -> Vec<usize> {
+    let mut capped = Vec::new();
+    for (i, lim) in limit.iter().enumerate() {
+        let id = AxisId::new(i as u16);
+        let (Some(o), Some(c)) = (obs.get(id).copied(), cmd.get_mut(id)) else { continue };
+        if !lim.is_finite() {
+            continue;
+        }
+        let lim = lim.max(0.0);
+        if c.mode == ControlMode::Torque {
+            let t = c.torque_ff_nm.clamp(-lim, lim);
+            if t != c.torque_ff_nm {
+                c.torque_ff_nm = t;
+                capped.push(i);
+            }
+            continue;
+        }
+        if c.mode != ControlMode::Impedance {
+            continue;
+        }
+        let ff = c.torque_ff_nm.clamp(-lim, lim);
+        let pd = c.kp_nm_per_rad * (c.position_rad - o.position_rad) + c.kd_nm_s_per_rad * (c.velocity_rad_s - o.velocity_rad_s);
+        let total = pd + ff;
+        if ff != c.torque_ff_nm || total.abs() > lim {
+            capped.push(i);
+            c.torque_ff_nm = ff;
+            if total.abs() > lim && pd != 0.0 {
+                // Scale both errors so that pd + ff = ±lim.
+                let s = ((lim * total.signum() - ff) / pd).clamp(0.0, 1.0);
+                c.position_rad = o.position_rad + (c.position_rad - o.position_rad) * s;
+                c.velocity_rad_s = o.velocity_rad_s + (c.velocity_rad_s - o.velocity_rad_s) * s;
+            }
+        }
+    }
+    capped
 }

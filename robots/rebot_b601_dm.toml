@@ -151,6 +151,11 @@ v_max = 0.07
 a_max = 0.7
 armature = 40.0
 effort = 107.0
+# What the motor may be told to squeeze with [N] (impedance + feedforward, at
+# the latest measurement). A full 350 ml can (0.37 kg) needs ~4 N per finger
+# at friction 0.5; uncapped, the B601-DM squeezed one with ~1200 N and broke a
+# printed finger.
+force_limit = 20.0
 sim_damping = 250.0
 sim_friction = 3.6
 friction = 3.6

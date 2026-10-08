@@ -236,6 +236,14 @@ pub struct JointSection {
     pub max: Option<f64>,
     #[serde(default)]
     pub effort: Option<f64>,
+    /// Cap on what the motor is told to exert, `kp·(q_cmd − q) + kd·(v_cmd − v) + τ_ff`
+    /// at the latest measurement [N·m] ([N] for prismatic); the command is
+    /// pulled toward the measured state to meet it. Default: the effort.
+    /// Without it a blocked joint met a reference that kept moving: the
+    /// B601-DM gripper closing on a can squeezed ~1200 N (motor PD on a 12 mm
+    /// error) and broke a finger.
+    #[serde(default)]
+    pub force_limit: Option<f64>,
     /// Torque command rate limit [N·m/s] (0 = unlimited).
     #[serde(default)]
     pub max_torque_rate: f64,

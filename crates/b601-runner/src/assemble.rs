@@ -171,6 +171,16 @@ pub fn motion_config(p: &RobotProfile, arm: &ArmModel, mpc_available: bool) -> R
     })
 }
 
+/// Per independent DOF: cap on the commanded impedance force (`[[joint]]
+/// force_limit`, else the effort; unbounded if neither).
+pub fn force_limits(p: &RobotProfile, arm: &ArmModel) -> Vec<f64> {
+    joints_in_order(p, arm)
+        .iter()
+        .zip(arm.dofs())
+        .map(|(j, d)| j.force_limit.unwrap_or(d.effort))
+        .collect()
+}
+
 /// SafetyGate config. Looser than the shaper (references produced by the shaper pass
 /// through unclamped; it only catches anomalies that bypass the shaper).
 pub fn safety_config(p: &RobotProfile, arm: &ArmModel) -> SafetyConfig {
