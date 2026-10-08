@@ -48,6 +48,8 @@ CONFIGS = {
     "ltv": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[]"}),
     "ltv_ref_ki": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[0.05, 0.5]", "track_ki": "100.0"}),
     "ilqr": ("mpc", {"planner": '"ilqr"', "replan_from_reference": "[]"}),
+    "ilqr_ref": ("mpc", {"planner": '"ilqr"', "replan_from_reference": "[0.05, 0.5]"}),
+    "ilqr_ref_look": ("mpc", {"planner": '"ilqr"', "replan_from_reference": "[0.05, 0.5]", "target_lookahead_s": "0.15"}),
     "ilqr_ref_ki": ("mpc", {"planner": '"ilqr"', "replan_from_reference": "[0.05, 0.5]", "track_ki": "100.0"}),
     "ltv_ki": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[]", "track_ki": "100.0"}),
     "ltv_ref": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[0.05, 0.5]"}),
