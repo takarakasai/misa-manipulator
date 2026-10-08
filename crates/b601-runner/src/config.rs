@@ -92,6 +92,14 @@ pub struct MpcSection {
     /// its limit and the arm swung ±1° at rest; 3 converge to the target.
     #[serde(default)]
     pub sqp_iters: usize,
+    /// Distance the planner keeps from the joint limits [rad]; 0 = the
+    /// planner's default (0.02).
+    #[serde(default)]
+    pub q_margin: f64,
+    /// Largest TCP position error one plan aims to close [m]; 0 = the
+    /// planner's default (0.05).
+    #[serde(default)]
+    pub e_max_pos: f64,
     /// Integral action of the tracking WBC [N·m/(rad·s)]; 0 = off.
     #[serde(default)]
     pub track_ki: f64,
@@ -116,6 +124,8 @@ impl Default for MpcSection {
             sqp_iters: 0,
             track_ki: 0.0,
             track_i_max_friction: 1.5,
+            q_margin: 0.0,
+            e_max_pos: 0.0,
         }
     }
 }

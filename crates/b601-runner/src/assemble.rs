@@ -288,6 +288,12 @@ pub fn mpc_planner(p: &RobotProfile, arm: &ArmModel) -> Result<Box<dyn manip_mpc
             }
             c.tcp_v_max = Some(m.tcp_v_max);
             c.workspace = workspace;
+            if m.q_margin > 0.0 {
+                c.q_margin = m.q_margin;
+            }
+            if m.e_max_pos > 0.0 {
+                c.e_max_pos = m.e_max_pos;
+            }
             Ok(Box::new(manip_mpc::LtvMpc::new(c)))
         }
         "ilqr" => {
@@ -300,6 +306,12 @@ pub fn mpc_planner(p: &RobotProfile, arm: &ArmModel) -> Result<Box<dyn manip_mpc
             }
             c.tcp_v_max = Some(m.tcp_v_max);
             c.workspace = workspace;
+            if m.q_margin > 0.0 {
+                c.q_margin = m.q_margin;
+            }
+            if m.e_max_pos > 0.0 {
+                c.e_max_pos = m.e_max_pos;
+            }
             Ok(Box::new(manip_mpc::IlqrMpc::new(c)))
         }
         other => Err(format!("[mpc] planner = \"{other}\" is not supported (ltv | ilqr)")),

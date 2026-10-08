@@ -43,6 +43,21 @@ ARM = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 # name -> (mode, edits): edits are [mpc] keys to set (None removes the section
 # override), applied on top of the profile with [sim] stiction = true.
 CONFIGS = {
+    # Error study (2026-10-08): one knob at a time from the profile's setting.
+    "base": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15"}),
+    "v06": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6"}),
+    "v10": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "1.0"}),
+    "qm005": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "q_margin": "0.005"}),
+    "om30": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "track_omega": "30.0"}),
+    "r100": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "rate_hz": "100.0"}),
+    "v06_qm005": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6", "q_margin": "0.005"}),
+    "v06_qm01": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6", "q_margin": "0.01"}),
+    "ilqr_v06_qm005": ("mpc", {"planner": '"ilqr"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6", "q_margin": "0.005"}),
+    "ilqr_v06_qm005_nolook": ("mpc", {"planner": '"ilqr"', "tcp_v_max": "0.6", "q_margin": "0.005"}),
+    "best": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6", "q_margin": "0.005"}),
+    "best_ki": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6", "q_margin": "0.005", "track_ki": "100.0"}),
+    "best_ki300": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "tcp_v_max": "0.6", "q_margin": "0.005", "track_ki": "300.0"}),
+    "emax10": ("mpc", {"planner": '"ltv"', "target_lookahead_s": "0.15", "e_max_pos": "0.10"}),
     "joint": ("joint", {}),
     "osc": ("osc", {}),
     "ltv": ("mpc", {"planner": '"ltv"', "replan_from_reference": "[]"}),

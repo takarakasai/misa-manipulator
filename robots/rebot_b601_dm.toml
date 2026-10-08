@@ -198,13 +198,23 @@ ang_v_max = 1.5
 
 # ── MPC (--mode mpc, or the API's via: "mpc" / teleop control: "mpc") ──
 # Plans continue from the tracked plan by default (replan_from_reference).
-# target_lookahead_s: leader targets move on at their estimated velocity for
-# this long over the horizon. Replaying the 12 real teleop sessions it cut the
-# TCP error 15 % (p95 30 %) at about twice the torque ripple (handover §5e).
-# On trial since 2026-10-08, not yet run on the arm: set 0 if the 3-8 Hz
-# shaking of fast teleop comes back.
+# Tuned 2026-10-08 on the 12 real teleop sessions replayed in sim
+# (scripts/teleop_study.py, handover §5e): TCP error 9.0 -> 4.8 mm rms (the
+# sim matching the real arm), 10.3 -> 6.9 mm with sticking friction.
+# - target_lookahead_s: leader targets move on at their estimated velocity
+#   for this long over the horizon (-15 % error, about 2x the torque ripple).
+# - tcp_v_max 0.3 -> 0.6 m/s: fast leader moves were held back by the cap
+#   (above 0.2 m/s: 3.5 % of the time, 37 % of the squared error).
+# - q_margin 0.02 -> 0.005 rad: the folded leader sits on the joint limits,
+#   and the planner's distance from them was a 5-6 mm offset at rest.
+# - track_ki 100: halves the rest offset from sticking friction (4 -> 2 mm).
+# None of this has run on the arm yet: if fast teleop shakes (3-8 Hz), set
+# target_lookahead_s = 0 first, then tcp_v_max = 0.3.
 [mpc]
 target_lookahead_s = 0.15
+tcp_v_max = 0.6
+q_margin = 0.005
+track_ki = 100.0
 
 # ── Sim (MuJoCo) ────────────────────────────────────────────────────
 [sim]
