@@ -1070,3 +1070,31 @@ fn park_with_a_stuck_gripper_stays_within_its_force_limit() {
     eprintln!("worst commanded gripper force {worst:.2} N (limit {lim})");
     assert!(worst <= lim + 1e-6, "{worst} N > {lim} N");
 }
+
+/// A target far from the arm is walked in at the catch-up speed, then
+/// passed through.
+#[test]
+fn catch_up_walks_a_far_target_in_then_passes_it_through() {
+    use crate::app::CatchUp;
+    use crate::supervisor::Target;
+    use nalgebra::DVector;
+    let q_now = DVector::from_vec(vec![0.0, 0.0]);
+    let step = DVector::from_vec(vec![0.01, 0.1]);
+    let goal = DVector::from_vec(vec![0.05, -0.2]);
+    let mut c = CatchUp::default();
+    let mut seen = vec![];
+    for _ in 0..10 {
+        let Target::Joint(q) = c.apply(Target::Joint(goal.clone()), &q_now, &step) else { panic!() };
+        seen.push(q);
+    }
+    assert!((seen[0][0] - 0.01).abs() < 1e-12 && (seen[0][1] + 0.1).abs() < 1e-12);
+    assert!((seen[1][1] + 0.2).abs() < 1e-12, "the second joint arrives after two steps");
+    assert!((seen[4][0] - 0.05).abs() < 1e-12, "the first joint arrives after five steps");
+    assert!(c.done);
+    let moved = DVector::from_vec(vec![1.0, 1.0]);
+    let Target::Joint(q) = c.apply(Target::Joint(moved.clone()), &q_now, &step) else { panic!() };
+    assert_eq!(q, moved, "after catching up the target passes through");
+    c.reset();
+    let Target::Joint(q) = c.apply(Target::Joint(moved), &q_now, &step) else { panic!() };
+    assert!((q[0] - 0.01).abs() < 1e-12, "a reset starts over from the arm");
+}

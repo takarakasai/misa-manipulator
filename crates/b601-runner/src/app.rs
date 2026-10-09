@@ -29,6 +29,51 @@ use crate::record::Recorder;
 use crate::replay::{self, LogWriter};
 use crate::supervisor::{Mode, Target};
 
+/// Walks a joint target in from where the arm is, at `speed` per joint, until
+/// it has caught up; then passes the target through. Without it, a teleop
+/// that started with the leader away from the follower jumped there: on the
+/// real B601-DM (Mpc, leader shoulder at −94°) the follower swung ~95° in
+/// 0.8 s at up to 181°/s.
+#[derive(Debug, Default)]
+pub struct CatchUp {
+    q: Option<DVector<f64>>,
+    pub done: bool,
+}
+
+impl CatchUp {
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// `step`: the most each joint may move this cycle.
+    pub fn apply(&mut self, target: Target, q_now: &DVector<f64>, step: &DVector<f64>) -> Target {
+        let Target::Joint(goal) = target else { return target };
+        if self.done || goal.len() != q_now.len() {
+            return Target::Joint(goal);
+        }
+        let q = self.q.get_or_insert_with(|| {
+            let steps = (0..goal.len()).map(|i| (goal[i] - q_now[i]).abs() / step[i].max(1e-12)).fold(0.0, f64::max);
+            if steps > 1.0 {
+                log::info!("catching up with the target ({steps:.0} cycles at the catch-up speed)");
+            }
+            q_now.clone()
+        });
+        let mut reached = true;
+        for i in 0..goal.len() {
+            let d = goal[i] - q[i];
+            if d.abs() > step[i] {
+                reached = false;
+            }
+            q[i] += d.clamp(-step[i], step[i]);
+        }
+        if reached {
+            self.done = true;
+            log::debug!("caught up with the target");
+        }
+        Target::Joint(q.clone())
+    }
+}
+
 /// Velocity of a joint target (leader), low-passed finite differences.
 #[derive(Debug, Default)]
 pub struct TargetRate {
@@ -360,6 +405,12 @@ pub fn run(
     // TCP pose and posture when Mpc started (the goal without a target).
     let mut mpc_hold: Option<(Isometry3<f64>, DVector<f64>)> = None;
     let mut target_rate = TargetRate::default();
+    let mut catch_up = CatchUp::default();
+    // Park's speed (fraction of each joint's v_max), per cycle.
+    let catch_up_step = DVector::from_iterator(
+        arm.n(),
+        crate::assemble::joints_in_order(profile, arm).iter().map(|j| j.v_max * profile.control.park_speed_scale * dt),
+    );
     let mut rec = match &opts.record {
         Some(p) => Some(Recorder::create(p, arm).map_err(|e| e.to_string())?),
         None => None,
@@ -476,6 +527,19 @@ pub fn run(
                 out.target
             }
             _ => source.target(arm, t, &keep, &s),
+        };
+        // Teleop-like modes start from where the arm is, not where the target is.
+        let target = match pending {
+            Mode::Joint | Mode::Osc | Mode::Mpc if requested && !matches!(source, Source::Api(_)) => {
+                if requests.iter().any(|m| matches!(m, Mode::Joint | Mode::Osc | Mode::Mpc)) {
+                    catch_up.reset();
+                }
+                catch_up.apply(target, &s.q, &catch_up_step)
+            }
+            _ => {
+                catch_up.reset();
+                target
+            }
         };
         let plan = match mpc.as_mut() {
             Some(d) if pending == Mode::Mpc => {
