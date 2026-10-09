@@ -213,10 +213,13 @@ ang_v_max = 1.5
 # - q_margin 0.02 -> 0.005 rad: the folded leader sits on the joint limits,
 #   and the planner's distance from them was a 5-6 mm offset at rest.
 # - track_ki 100: halves the rest offset from sticking friction (4 -> 2 mm).
-# None of this has run on the arm yet: if fast teleop shakes (3-8 Hz), set
-# target_lookahead_s = 0 first, then tcp_v_max = 0.3.
+# On the arm (2026-10-10, hw_mpc_cu1/cu2, ~2 m/s TCP): the 0.15 s lookahead
+# overshot whenever the target stopped (shoulder 4°, wrist 119°/s) and doubled
+# the 3-8 Hz torque swing (j2/j3 4.9/5.0 -> 2.3/2.3 N·m without it), so it is
+# off. The rest (tcp_v_max 0.6, q_margin 0.005, track_ki 100) ran fine. If fast
+# teleop shakes, try tcp_v_max = 0.3 next.
 [mpc]
-target_lookahead_s = 0.15
+target_lookahead_s = 0.0
 tcp_v_max = 0.6
 q_margin = 0.005
 track_ki = 100.0
