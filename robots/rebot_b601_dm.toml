@@ -140,25 +140,41 @@ friction = 0.12
 # Gripper (in the model: displacement [m] of one finger; the other is a mimic).
 # Gains and inertia are in model units (N/m, kg), hence the large magnitudes. On the
 # motor side they are scaled by ratio² (ratio = 0.00844 m/rad → 7.2e-5), giving kp ≈ 7 N·m/rad;
-# forces by ratio (effort 107 N ≈ 0.9 N·m). The values keep the motor-side gains of the
-# earlier 0.00605 m/rad guess.
+# forces by ratio (effort 107 N ≈ 0.9 N·m).
+# Soft on purpose: the squeeze is kp × how far the leader closes past contact,
+# 4 N per mm (a can, ~4 N per finger, at a 1 mm over-close; 20 N at 5 mm).
+# At kp 1e5 any contact went straight to force_limit, and fully closed the
+# mechanism's stop (0.31 mm from the motor zero) was pushed with 20 N all the
+# time. Tracking in free motion (sim, real leader commands): 0.5 mm rms (0.4 at
+# 1e5). kd ≈ 1.4·√(kp·armature).
 [[joint]]
 name = "finger_left"
-kp = 1.0e5
-kd = 2.5e3
+kp = 4.0e3
+kd = 5.6e2
 gravity_kd = 5.0e2
-v_max = 0.07
+# 50 mm/s: closing at 112 mm/s into the stop measured 216 N on the fingers
+# (reflected inertia 40 kg); impact grows with speed, not with force_limit.
+v_max = 0.05
 a_max = 0.7
 armature = 40.0
 effort = 107.0
-# What the motor may be told to squeeze with [N] (impedance + feedforward, at
-# the latest measurement). A full 350 ml can (0.37 kg) needs ~4 N per finger
-# at friction 0.5; uncapped, the B601-DM squeezed one with ~1200 N and broke a
-# printed finger.
-force_limit = 20.0
-sim_damping = 250.0
-sim_friction = 3.6
-friction = 3.6
+# What the motor may be told to exert [N] (impedance + feedforward, at the
+# latest measurement). Uncapped, the B601-DM squeezed a full 350 ml can with
+# ~1200 N and broke a printed finger. 20 N was too little: the rack and gears
+# take 25 N (median) to 44 N (p90) just to move the fingers (real teleop logs),
+# so they barely opened. The fingertips get this minus that friction.
+force_limit = 50.0
+# Friction identified on the arm 2026-10-10 (manip hw friction, reprinted
+# fingers, 10-40 mm/s): Coulomb ~17 N closed rising to ~35 N near fully open,
+# viscous ~450 N·s/m (fit 18.6 N + 450 N·s/m). The earlier 3.6 N was 5× low.
+# friction_v_eps in m/s: the [control] 0.05 is in rad/s and would be 50 mm/s.
+sim_damping = 450.0
+sim_friction = 20.0
+friction = 18.0
+# Below the fitted 450: with 400 the feedforward outran the reference while
+# closing fast (80 mm/s against a 50 mm/s reference) and hit the stop.
+viscous = 150.0
+friction_v_eps = 0.005
 
 # ── Poses ───────────────────────────────────────────────────────────
 # rest = folded pose (motor zero). Destination of Park.
@@ -339,5 +355,7 @@ motor = [
   # Opening makes the motor angle negative (LeRobot gripper range −270°..0) and the finger displacement positive.
   # ratio measured 2026-10-03: fully open is 5.92 rad from the motor zero, the fingers ~100 mm (50 mm
   # each), i.e. 0.00844 m/rad — the BOM pinion (pitch radius 8 mm) within the measurement.
-  { joint = "finger_left", id = 7, model = "dm4310", sign = -1.0, ratio = 0.00844 },
+  # zero: the reprinted fingers (2026-10-10) close 5.7 mm (0.67 rad) further than the
+  # motor zero set with the original ones; the offset maps fully closed to 0.
+  { joint = "finger_left", id = 7, model = "dm4310", sign = -1.0, ratio = 0.00844, zero = 0.0057 },
 ]
