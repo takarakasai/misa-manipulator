@@ -272,6 +272,11 @@ pub struct JointSection {
     /// Viscous friction the controller compensates [N·m·s/rad].
     #[serde(default)]
     pub viscous: f64,
+    /// This joint's velocity over which the Coulomb compensation ramps in,
+    /// in its own units (the `[control]` / `[osc]` value is in rad/s; a
+    /// prismatic joint such as the gripper needs m/s). Default: theirs.
+    #[serde(default)]
+    pub friction_v_eps: Option<f64>,
 }
 
 fn one() -> f64 {

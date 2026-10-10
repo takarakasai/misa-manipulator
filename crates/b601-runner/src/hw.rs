@@ -395,18 +395,23 @@ pub fn friction_sweep(
     o: &FrictionSweep,
     csv: &std::path::Path,
 ) -> Result<Vec<FrictionFit>, String> {
+    // Only the swept joints: the others hold the ready pose with their usual
+    // gains (scaling those as well left the arm stiff and underdamped).
     let mut profile = profile.clone();
-    for j in &mut profile.joint {
+    let swept: Vec<String> = o.dofs.iter().map(|&d| arm.dofs()[d].name.clone()).collect();
+    for j in profile.joint.iter_mut().filter(|j| swept.contains(&j.name)) {
         j.kp *= o.kp_scale;
     }
     let base = crate::assemble::named_pose(&profile, arm, "ready").ok_or("friction sweep starts from [pose.ready]")?;
-    let margin = 0.05;
     let plan = crate::app::SweepPlan {
         joints: o
             .dofs
             .iter()
             .map(|&d| {
                 let dof = &arm.dofs()[d];
+                // Stay clear of the stops: 0.05 rad, or a tenth of a short range
+                // (the gripper's is 0.05 m).
+                let margin = 0.05f64.min(0.1 * (dof.q_max - dof.q_min));
                 ((d), (base[d] - o.amplitude).max(dof.q_min + margin), (base[d] + o.amplitude).min(dof.q_max - margin))
             })
             .collect(),

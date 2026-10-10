@@ -109,10 +109,9 @@ pub fn chain_dynamics_with(
 /// - the smaller of the two where they agree is zero at standstill, so the
 ///   arm could not break away (stiction ~1.75 N·m) and stuck mid-way.
 pub fn gated_friction(f: &FrictionModel, v_ref: &DVector<f64>, v: &DVector<f64>) -> DVector<f64> {
-    let eps = f.v_eps.max(1e-6);
     let mut out = f.compensation(v_ref);
     for i in 0..out.len() {
-        if out[i] * v[i] < 0.0 && v[i].abs() > eps {
+        if out[i] * v[i] < 0.0 && v[i].abs() > f.v_eps[i].max(1e-6) {
             out[i] = 0.0;
         }
     }

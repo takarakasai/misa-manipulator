@@ -258,13 +258,14 @@ pub fn feedback_quantization(p: &RobotProfile, arm: &ArmModel) -> Result<Vec<[f6
 }
 
 /// The controller's friction estimate from `[[joint]] friction / viscous`;
-/// `None` when every joint is 0 (compensation off).
+/// `None` when every joint is 0 (compensation off). `v_eps` unless the joint
+/// sets its own `friction_v_eps`.
 pub fn friction_model(p: &RobotProfile, arm: &ArmModel, v_eps: f64) -> Option<manip_control::FrictionModel> {
     let js = joints_in_order(p, arm);
     let m = manip_control::FrictionModel {
         coulomb: col(&js, |j| j.friction),
         viscous: col(&js, |j| j.viscous),
-        v_eps,
+        v_eps: col(&js, |j| j.friction_v_eps.unwrap_or(v_eps)),
     };
     (!m.is_zero()).then_some(m)
 }

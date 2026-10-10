@@ -114,7 +114,7 @@ fn gated_friction_follows_the_reference_unless_the_joint_opposes_it() {
     use manip_control::FrictionModel;
     use manip_wbc::tasks::gated_friction;
     use nalgebra::DVector;
-    let f = FrictionModel { coulomb: DVector::from_element(4, 1.0), viscous: DVector::zeros(4), v_eps: 0.05 };
+    let f = FrictionModel { coulomb: DVector::from_element(4, 1.0), viscous: DVector::zeros(4), v_eps: DVector::from_element(4, 0.05) };
     let v_ref = DVector::from_vec(vec![1.0, 1.0, 1.0, 0.0]);
     let v = DVector::from_vec(vec![0.0, -0.03, -0.2, 0.5]);
     let g = gated_friction(&f, &v_ref, &v);
