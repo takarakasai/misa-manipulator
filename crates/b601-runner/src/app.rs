@@ -447,6 +447,7 @@ pub fn run(
     let mut last_guard_log = f64::NEG_INFINITY;
     let mut last_gate_log = -1.0;
     let mut last_force_log = -1.0;
+    let mut last_speed_log = -1.0;
     let result: Result<(), String> = loop {
         let tick_start = Instant::now();
         let s = Policy::state(arm, &obs);
@@ -580,6 +581,11 @@ pub fn run(
         if !out.verdict.is_clean() && t - last_gate_log > 1.0 {
             log::warn!("SafetyGate: {:?}", out.verdict);
             last_gate_log = t;
+        }
+        if !out.overspeed.is_empty() && t - last_speed_log > 1.0 {
+            let names: Vec<&str> = out.overspeed.iter().map(|&i| arm.dofs()[i].name.as_str()).collect();
+            log::warn!("overspeed: braking {}", names.join(", "));
+            last_speed_log = t;
         }
         if !out.force_capped.is_empty() && t - last_force_log > 1.0 {
             let names: Vec<&str> = out.force_capped.iter().map(|&i| arm.dofs()[i].name.as_str()).collect();

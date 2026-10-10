@@ -28,6 +28,8 @@ pub struct Policy {
     dt: f64,
     /// Per axis: cap on the commanded impedance force (see `cap_force`).
     force_limit: Vec<f64>,
+    /// Per axis: measured speed above which the command brakes (`brake_overspeed`).
+    overspeed: Vec<f64>,
 }
 
 /// What one step produced (beyond the command itself).
@@ -39,6 +41,8 @@ pub struct StepOut {
     pub verdict: SafetyVerdict,
     /// Axes whose command `cap_force` pulled in this step.
     pub force_capped: Vec<usize>,
+    /// Axes that moved faster than allowed and were braked this step.
+    pub overspeed: Vec<usize>,
 }
 
 impl Policy {
@@ -56,6 +60,7 @@ impl Policy {
             cmd: Command::idle(arm.n()),
             dt: 1.0 / profile.control.rate_hz,
             force_limit: assemble::force_limits(profile, arm),
+            overspeed: assemble::joints_in_order(profile, arm).iter().map(|j| OVERSPEED * j.v_max).collect(),
         })
     }
 
@@ -100,6 +105,7 @@ impl Policy {
         to_command(&jc, &mut self.cmd);
         let verdict = self.gate.apply(&mut self.cmd, obs, Duration::from_secs_f64(self.dt));
         // Last, after the gate (which may move the position command).
+        let overspeed = brake_overspeed(&mut self.cmd, obs, &self.overspeed);
         let force_capped = cap_force(&mut self.cmd, obs, &self.force_limit);
         StepOut {
             state: s,
@@ -107,6 +113,7 @@ impl Policy {
             info,
             verdict,
             force_capped,
+            overspeed,
         }
     }
 }
@@ -167,4 +174,35 @@ pub(crate) fn cap_force(cmd: &mut Command, obs: &Observation, limit: &[f64]) -> 
         }
     }
     capped
+}
+
+/// Brake threshold as a multiple of each joint's `v_max`.
+const OVERSPEED: f64 = 1.2;
+
+/// A joint measured faster than `limit` is braked: its position command is
+/// moved to the measured position (no push from the position error), its
+/// velocity command clamped to the limit, so the motor's damping slows it,
+/// and a feedforward pushing along the motion dropped (gravity or friction
+/// compensation; one opposing it is kept). Keeping the feedforward was not
+/// enough: an over-compensated gripper friction kept it at 80 mm/s.
+/// The SafetyGate only clamps the *commanded* velocity; on the real B601-DM
+/// the gripper, lagging its reference by 6 mm, caught up at 112 mm/s (limit
+/// 70) and hit its closed stop with a measured 216 N, past any force cap.
+/// Returns the braked axes.
+pub(crate) fn brake_overspeed(cmd: &mut Command, obs: &Observation, limit: &[f64]) -> Vec<usize> {
+    let mut braked = Vec::new();
+    for (i, lim) in limit.iter().enumerate() {
+        let id = AxisId::new(i as u16);
+        let (Some(o), Some(c)) = (obs.get(id).copied(), cmd.get_mut(id)) else { continue };
+        if c.mode != ControlMode::Impedance || !lim.is_finite() || *lim <= 0.0 || o.velocity_rad_s.abs() <= *lim {
+            continue;
+        }
+        c.position_rad = o.position_rad;
+        c.velocity_rad_s = o.velocity_rad_s.clamp(-lim, *lim);
+        if c.torque_ff_nm * o.velocity_rad_s > 0.0 {
+            c.torque_ff_nm = 0.0;
+        }
+        braked.push(i);
+    }
+    braked
 }

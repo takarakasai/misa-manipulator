@@ -1098,3 +1098,35 @@ fn catch_up_walks_a_far_target_in_then_passes_it_through() {
     let Target::Joint(q) = c.apply(Target::Joint(moved), &q_now, &step) else { panic!() };
     assert!((q[0] - 0.01).abs() < 1e-12, "a reset starts over from the arm");
 }
+
+/// A joint measured faster than its limit loses the push from its position
+/// error and is told to move no faster than the limit; slower ones are untouched.
+#[test]
+fn overspeed_brake_removes_the_push_and_clamps_the_velocity() {
+    use misa_core::{AxisCommand, AxisId, Command, ControlMode, Observation};
+    let mut cmd = Command::idle(2);
+    for i in 0..2 {
+        *cmd.get_mut(AxisId::new(i)).unwrap() = AxisCommand {
+            mode: ControlMode::Impedance,
+            position_rad: 0.0,
+            velocity_rad_s: -0.05,
+            torque_ff_nm: -20.0,
+            kp_nm_per_rad: 4.0e3,
+            kd_nm_s_per_rad: 560.0,
+        };
+    }
+    let mut obs = Observation::empty(2, 0);
+    for (i, v) in [(0u16, -0.112), (1u16, -0.04)] {
+        let o = obs.get_mut(AxisId::new(i)).unwrap();
+        o.position_rad = 0.006;
+        o.velocity_rad_s = v;
+    }
+    let braked = crate::policy::brake_overspeed(&mut cmd, &obs, &[0.06, 0.06]);
+    assert_eq!(braked, vec![0]);
+    let c = cmd.get(AxisId::new(0)).unwrap();
+    assert_eq!(c.position_rad, 0.006, "no push from the position error");
+    assert_eq!(c.velocity_rad_s, -0.06, "damping pulls the speed down to the limit");
+    assert_eq!(c.torque_ff_nm, 0.0, "no feedforward along the motion");
+    let c1 = cmd.get(AxisId::new(1)).unwrap();
+    assert_eq!((c1.position_rad, c1.velocity_rad_s), (0.0, -0.05), "within the limit: untouched");
+}
