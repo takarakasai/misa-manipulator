@@ -406,6 +406,7 @@ pub fn run(
     let mut mpc_hold: Option<(Isometry3<f64>, DVector<f64>)> = None;
     let mut target_rate = TargetRate::default();
     let mut catch_up = CatchUp::default();
+    let mut was_api_teleop = false;
     // Park's speed (fraction of each joint's v_max), per cycle.
     let catch_up_step = DVector::from_iterator(
         arm.n(),
@@ -529,10 +530,13 @@ pub fn run(
             }
             _ => source.target(arm, t, &keep, &s),
         };
-        // Teleop-like modes start from where the arm is, not where the target is.
+        // Teleop-like modes start from where the arm is, not where the target is
+        // (the motion API's own motions start from the reference; its teleop
+        // follows the leader like any teleop).
+        let api_teleop = matches!(&source, Source::Api(a) if a.exec.teleop_active());
         let target = match pending {
-            Mode::Joint | Mode::Osc | Mode::Mpc if requested && !matches!(source, Source::Api(_)) => {
-                if requests.iter().any(|m| matches!(m, Mode::Joint | Mode::Osc | Mode::Mpc)) {
+            Mode::Joint | Mode::Osc | Mode::Mpc if requested && (!matches!(source, Source::Api(_)) || api_teleop) => {
+                if requests.iter().any(|m| matches!(m, Mode::Joint | Mode::Osc | Mode::Mpc)) || (api_teleop && !was_api_teleop) {
                     catch_up.reset();
                 }
                 catch_up.apply(target, &s.q, &catch_up_step)
@@ -542,6 +546,7 @@ pub fn run(
                 target
             }
         };
+        was_api_teleop = api_teleop;
         let plan = match mpc.as_mut() {
             Some(d) if pending == Mode::Mpc => {
                 if requests.contains(&Mode::Mpc) || mpc_hold.is_none() {

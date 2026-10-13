@@ -1183,6 +1183,11 @@ impl Executive {
         g.still_s = 0.0;
     }
 
+    /// The arm follows the leader (an API `mode: teleop`).
+    pub fn teleop_active(&self) -> bool {
+        self.teleop_on
+    }
+
     /// The leader's pose mapped onto this arm (all independent DOFs), when a
     /// leader is attached and its last sample is fresh. `keep` fills unmapped
     /// DOFs. What a teleop records as the action.
