@@ -9,3 +9,4 @@
 /logs/
 # Python bytecode from scripts/.
 __pycache__/
+*.egg-info/
