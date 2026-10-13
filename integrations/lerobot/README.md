@@ -26,13 +26,13 @@ LeRobot は `lerobot_robot_*` という名前の配布物を自動で import す
 ## 録画（リーダーで操作）
 
 ```bash
-# 端末 1: runner（実機）。リーダーも runner が読む
-manip --rt-priority 80 run --robot robots/rebot_b601_dm.toml --plant can --source api --leader leaders/stararm102.toml
+# 端末 1: runner（実機）。リーダーも runner が読む。この PC では 8080 を code-server が使うので 8085
+manip --rt-priority 80 run --robot robots/rebot_b601_dm.toml --plant can --source api \
+      --api-bind 127.0.0.1:8085 --leader leaders/stararm102.toml
 
-# 端末 2: LeRobot
-lerobot-record \
-  --robot.type=misa_b601 --robot.id=b601dm $REBOT_CAMERAS \
-  --teleop.type=misa_leader --teleop.id=stararm102 \
+# 端末 2: LeRobot（~/work/dp/lerobot-env.sh が $MISA_ROBOT / $MISA_TELEOP を用意する）
+source ~/work/dp/lerobot-env.sh
+lerobot-record $MISA_ROBOT $REBOT_CAMERAS $MISA_TELEOP \
   --dataset.repo_id=<user>/<name> --dataset.single_task="..." --dataset.fps=30 ...
 ```
 
@@ -51,4 +51,5 @@ runner は `--leader` なしでよい。`lerobot-record --policy.path=...`（ま
   TCP_NODELAY が無く、keep-alive だと遅延 ACK で 1 要求 ~40 ms 待った（今は ~0.3 ms）。
 - 較正は runner のプロファイル（`[hardware]` の `zero` / `sign` / `ratio`）が持つ。
   LeRobot の calibrate は何もしない。
+- 実機で確認（2026-10-13、カメラなし 10 s）: 300 フレーム、30 Hz ちょうど、1 要求 0.2〜0.3 ms。
 - シムで確かめるには runner を `--plant rigid` で（リーダーは読むだけなので本物でよい）。
