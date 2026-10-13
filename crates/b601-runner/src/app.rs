@@ -563,7 +563,8 @@ pub fn run(
         };
         let out = policy.step(arm, &obs, &requests, &target, plan.as_ref());
         if let Source::Api(a) = &source {
-            let snap = crate::api::Snapshot::build(t, policy.mode(), &out.state, &obs, &a.info, Some(a.exec.report()));
+            let mut snap = crate::api::Snapshot::build(t, policy.mode(), &out.state, &obs, &a.info, Some(a.exec.report()));
+            snap.leader = a.exec.leader_target(&out.state.q).map(|q| q.as_slice().to_vec());
             *a.snapshot.lock().unwrap() = snap;
         }
         if let Some(tr) = &out.info.transition {

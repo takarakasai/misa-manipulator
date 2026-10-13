@@ -92,9 +92,11 @@ POST した指令にはすべて `id` が付き、状態は
 | `velocity/tcp` | `linear`、`angular`、`frame`、`deg`、`timeout` | TCP の速度 |
 | `accel/joint` | `a`、`deg`、`timeout` | 関節加速度（速度は制限で頭打ち） |
 | `accel/tcp` | `linear`、`angular`、`frame`、`deg`、`timeout` | TCP の加速度 |
+| `stream/joint` | `q`、`deg`、`timeout` | 関節の**目標位置**（学習ポリシー・LeRobot の行動）。参照は最新の目標へ `v_max` / `a_max` 以内で向かう（止まれる速さ、最後の 50 ms は比例）。グリッパの値はグリッパの目標になる |
 
 - **`timeout`（既定 0.2 s）以内に次の指令が来なければ減速して止まる**（done:
-  `no command within the timeout`）。送り続けるなら 50 Hz 程度で。
+  `no command within the timeout`、`stream/joint` は `no target within the timeout`）。
+  送り続けるなら 50 Hz 程度で（`stream/joint` は 30 Hz でよい）。
 - 同じ種類の指令が続けば同じ運動が続く（前の id は `done: continued by #n`）。
 - 関節は可動域の手前（0.02 rad）で止まる。TCP は参照が実測から 2 cm / 0.1 rad 以上先へ
   行かない（壁や可動域で腕が止まっても参照だけが進まない）。作業領域の箱と自己干渉は
@@ -142,9 +144,13 @@ POST した指令にはすべて `id` が付き、状態は
   "gripper": {"position": 0.03, "width": 0.06},
   "wrench_estimate": [6],
   "motion": {"active": {"id": 7, "kind": "tcp_trajectory"}, "queued": 0, "teleop": false,
-             "force": null, "impedance": null, "joint_torque": null, "gripper_goal": 0.03}
+             "force": null, "impedance": null, "joint_torque": null, "gripper_goal": 0.03},
+  "leader": [...]
 }
 ```
+
+`leader` は `--leader` で起動したときだけ（サンプルが新しいとき）: リーダーの姿勢を
+この腕の関節に写したもの（teleop の目標、記録するときの行動）。
 
 `GET /v1/info` は関節名・可動域・速度上限・トルク上限・名前付き姿勢・グリッパ・
 teleop / MPC の有無。`GET /v1/motions/<id>` は指令 1 つの状態。

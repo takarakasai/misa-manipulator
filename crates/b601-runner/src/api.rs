@@ -126,6 +126,10 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrench_estimate: Option<Vec<f64>>,
     pub motion: Option<ExecReport>,
+    /// The leader's pose mapped onto this arm (`--leader`, fresh samples
+    /// only): what a teleop drives toward, and records as the action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -177,6 +181,7 @@ impl Snapshot {
             gripper: info.gripper_idx.map(|g| GripperState { position: s.q[g], width: 2.0 * s.q[g] }),
             wrench_estimate,
             motion,
+            leader: None,
         }
     }
 }
@@ -417,6 +422,12 @@ impl ArmInfo {
                     })
                     .collect::<Result<_, String>>()?;
                 MotionCmd::WaypointsTcp { points, times: times(o)?, speed: speed(o)? }
+            }
+            "stream/joint" => {
+                allow(o, &["q", "deg", "timeout"])?;
+                let values = self.joint_values(o.get("q").ok_or("missing \"q\"")?, deg, "q")?;
+                let timeout = positive(o, "timeout")?.unwrap_or(DEFAULT_STREAM_TIMEOUT);
+                MotionCmd::JointTarget { values, timeout }
             }
             "velocity/joint" | "accel/joint" => {
                 let key = if path == "velocity/joint" { "v" } else { "a" };

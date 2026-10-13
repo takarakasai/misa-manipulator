@@ -122,6 +122,11 @@ pub enum MotionCmd {
     WaypointsTcp { points: Vec<TcpGoal>, times: Option<Vec<f64>>, speed: f64 },
     /// Joint velocity (`v`) or acceleration (`a`) stream.
     JointStream { v: Option<DVector<f64>>, a: Option<DVector<f64>>, timeout: f64 },
+    /// Joint position targets streamed by a client (a learned policy, LeRobot):
+    /// the reference moves toward the latest target within the joint limits;
+    /// a gripper value sets the gripper's goal. Without a new target within
+    /// `timeout` the reference brakes to rest and the stream ends.
+    JointTarget { values: Vec<(usize, f64)>, timeout: f64 },
     /// TCP twist / acceleration stream (`[ω; v]`, `[α; a]` in `frame`).
     TcpStream { twist: Option<Vector6<f64>>, accel: Option<Vector6<f64>>, frame: Frame, timeout: f64 },
     Force(Option<ForceSpec>),
@@ -145,6 +150,7 @@ impl MotionCmd {
             MotionCmd::WaypointsTcp { .. } => "waypoints_tcp",
             MotionCmd::JointStream { v: Some(_), .. } => "velocity_joint",
             MotionCmd::JointStream { .. } => "accel_joint",
+            MotionCmd::JointTarget { .. } => "target_joint",
             MotionCmd::TcpStream { twist: Some(_), .. } => "velocity_tcp",
             MotionCmd::TcpStream { .. } => "accel_tcp",
             MotionCmd::Force(_) => "force",
@@ -295,13 +301,14 @@ enum Active {
     Tcp { traj: Traj, t0: f64, r0: UnitQuaternion<f64>, posture: DVector<f64> },
     Mpc { pose: Isometry3<f64>, posture: DVector<f64>, t0: f64 },
     JointStream { v: Option<DVector<f64>>, a: Option<DVector<f64>>, last_cmd: f64, timeout: f64, r: JointRef },
+    JointTarget { goal: DVector<f64>, last_cmd: f64, timeout: f64, r: JointRef },
     TcpStream { twist: Option<Vector6<f64>>, accel: Option<Vector6<f64>>, frame: Frame, last_cmd: f64, timeout: f64, r: TcpRefState, posture: DVector<f64> },
 }
 
 impl Active {
     fn mode(&self) -> Mode {
         match self {
-            Active::Joint { .. } | Active::JointStream { .. } => Mode::Joint,
+            Active::Joint { .. } | Active::JointStream { .. } | Active::JointTarget { .. } => Mode::Joint,
             Active::Tcp { .. } | Active::TcpStream { .. } => Mode::Osc,
             Active::Mpc { .. } => Mode::Mpc,
         }
@@ -458,6 +465,7 @@ impl Executive {
                     Active::Tcp { .. } => "tcp_trajectory",
                     Active::Mpc { .. } => "mpc",
                     Active::JointStream { .. } => "joint_stream",
+                    Active::JointTarget { .. } => "joint_target",
                     Active::TcpStream { .. } => "tcp_stream",
                 },
             }),
@@ -776,6 +784,21 @@ impl Executive {
                 self.replace(id, MotionCmd::JointStream { v, a, timeout });
                 let _ = (arm, s);
             }
+            MotionCmd::JointTarget { values, timeout } if !append => {
+                self.stream_gripper(arm, &values);
+                if let Some((old, Active::JointTarget { goal, last_cmd, timeout: ot, .. })) = &mut self.active {
+                    for &(i, x) in &values {
+                        goal[i] = arm.dofs()[i].clamp(x);
+                    }
+                    let prev = *old;
+                    (*last_cmd, *ot) = (t, timeout);
+                    *old = id;
+                    self.set(prev, State::Done, Some(format!("continued by #{id}")));
+                    self.set(id, State::Active, None);
+                    return;
+                }
+                self.replace(id, MotionCmd::JointTarget { values, timeout });
+            }
             MotionCmd::TcpStream { twist, accel, frame, timeout } if !append => {
                 if let Some((old, Active::TcpStream { twist: ow, accel: oa, frame: of, last_cmd, timeout: ot, .. })) = &mut self.active
                     && ow.is_some() == twist.is_some()
@@ -933,6 +956,14 @@ impl Executive {
             MotionCmd::JointStream { v, a, timeout } => {
                 let r = self.joint_anchor(s, joint_mode(pending));
                 Ok((Active::JointStream { v, a, last_cmd: t, timeout, r }, None))
+            }
+            MotionCmd::JointTarget { values, timeout } => {
+                let r = self.joint_anchor(s, joint_mode(pending));
+                let mut goal = r.q.clone();
+                for &(i, x) in &values {
+                    goal[i] = arm.dofs()[i].clamp(x);
+                }
+                Ok((Active::JointTarget { goal, last_cmd: t, timeout, r }, None))
             }
             MotionCmd::TcpStream { twist, accel, frame, timeout } => {
                 let (r, posture) = self.tcp_anchor(s, osc_mode(pending));
@@ -1140,6 +1171,27 @@ impl Executive {
 
     /// The gripper's reference this cycle (follows the measurement while the
     /// arm is not driven by motions).
+    /// A streamed gripper value becomes the gripper's goal (at its configured
+    /// speed and force limit; a gripper command in progress is replaced).
+    fn stream_gripper(&mut self, arm: &ArmModel, values: &[(usize, f64)]) {
+        let Some(g) = self.gripper.as_mut() else { return };
+        let Some(&(_, x)) = values.iter().find(|(i, _)| *i == g.dof) else { return };
+        if let Some(old) = g.id.take() {
+            self.board.lock().unwrap().set(old, State::Aborted, Some("replaced by a joint target stream".into()));
+        }
+        g.goal = arm.dofs()[g.dof].clamp(x);
+        g.still_s = 0.0;
+    }
+
+    /// The leader's pose mapped onto this arm (all independent DOFs), when a
+    /// leader is attached and its last sample is fresh. `keep` fills unmapped
+    /// DOFs. What a teleop records as the action.
+    pub fn leader_target(&self, keep: &DVector<f64>) -> Option<DVector<f64>> {
+        let tp = self.teleop.as_ref()?;
+        let sample = tp.thread.latest()?;
+        (sample.at.elapsed() <= tp.timeout).then(|| tp.mapping.map(&sample.q, keep))
+    }
+
     fn step_gripper(&mut self, arm: &ArmModel, s: &ArmState, driving: bool) -> Option<JointRef> {
         let g = self.gripper.as_mut()?;
         let dof = g.dof;
@@ -1227,6 +1279,39 @@ impl Executive {
                     self.set(id, State::Done, None);
                 }
                 r
+            }
+            Active::JointTarget { goal, last_cmd, timeout, r } => {
+                let fresh = t - *last_cmd <= *timeout;
+                let mut moving = false;
+                for i in 0..r.q.len() {
+                    // Fastest approach that can still stop at the goal (and at
+                    // the range ends), linear in the last 50 ms.
+                    let (lo, hi) = range[i];
+                    let g = if fresh { goal[i].clamp(lo + margin, hi - margin) } else { r.q[i] };
+                    let e = g - r.q[i];
+                    let vt = if fresh {
+                        e.signum() * vmax[i].min((2.0 * amax[i] * e.abs()).sqrt()).min(e.abs() / 0.05)
+                    } else {
+                        0.0
+                    };
+                    let dv = (vt - r.v[i]).clamp(-amax[i] * dt, amax[i] * dt);
+                    let v1 = r.v[i] + dv;
+                    r.q[i] += 0.5 * (r.v[i] + v1) * dt;
+                    r.a[i] = dv / dt;
+                    r.v[i] = v1;
+                    moving |= v1.abs() > 1e-9;
+                }
+                let out = r.clone();
+                if !fresh && !moving {
+                    let why = if self.stopping == Some(id) { "stopped" } else { "no target within the timeout: stopped" };
+                    self.active = None;
+                    if self.stopping == Some(id) {
+                        self.stopping = None;
+                    }
+                    self.set(id, State::Done, Some(why.into()));
+                    return JointRef::at_rest(out.q);
+                }
+                out
             }
             Active::JointStream { v, a, last_cmd, timeout, r } => {
                 let fresh = t - *last_cmd <= *timeout;

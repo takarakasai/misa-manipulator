@@ -327,3 +327,38 @@ fn park_finishes_when_friction_holds_a_joint_short() {
     assert!(off > 0.05, "the test should leave a joint outside the tolerance ({off})");
     assert!(t[t.len() - 1] < 4.0 + 15.0);
 }
+
+/// Joint targets streamed at 30 Hz (a policy's actions): the arm follows a
+/// moving target within its limits, the gripper goes to the streamed width,
+/// each request continues the stream, and when they stop the arm comes to
+/// rest by itself.
+#[test]
+fn joint_target_stream_follows_then_stops() {
+    let mut script = Vec::new();
+    // joint1 sweeps 0 -> 40° over 2 s, joint2 steps once (down: up would hit the
+    // workspace ceiling, where the guard holds the reference); the gripper opens to 20 mm.
+    for k in 0..60 {
+        let t = 1.0 + k as f64 / 30.0;
+        let a = 40.0 * (k as f64 / 59.0);
+        script.push((t, "stream/joint", json!({"q": {"joint1": a, "joint2": -75.0, "finger_left": 0.02}, "deg": true, "timeout": 0.2})));
+    }
+    let r = run_script(|t| t, &script, 5.0, "target");
+    let n = script.len();
+    for k in 0..n - 1 {
+        assert_eq!(r.status(k).state, State::Done, "#{k}: {:?}", r.status(k));
+    }
+    let last = r.status(n - 1);
+    assert_eq!(last.state, State::Done, "{last:?}");
+    let t = r.col("t");
+    let at = |c: &str, s: f64| r.col(c)[t.iter().position(|&x| x >= s).unwrap()];
+    // Lags the moving target by little, ends on it, and stays.
+    let lag = at("q_joint1", 2.5).to_degrees() - 40.0 * ((2.5 - 1.0) / (59.0 / 30.0));
+    eprintln!("joint1 lag at 2.5 s {lag:.1}°, at 4.9 s {:.2}°, joint2 {:.2}°, finger {:.4} m", at("q_joint1", 4.9).to_degrees(), at("q_joint2", 4.9).to_degrees(), at("q_finger_left", 4.9));
+    assert!(lag.abs() < 5.0, "lagging {lag:.1}°");
+    assert!((at("q_joint1", 4.9).to_degrees() - 40.0).abs() < 0.5);
+    assert!((at("q_joint2", 4.9).to_degrees() + 75.0).abs() < 0.5);
+    assert!((at("q_finger_left", 4.9) - 0.02).abs() < 1.5e-3);
+    assert!(at("v_joint1", 4.9).abs() < 0.02, "still moving after the stream ended");
+    let vr = r.col("vref_joint1");
+    assert!(vr.iter().all(|v| v.abs() <= 3.0 + 1e-9), "reference faster than v_max");
+}
